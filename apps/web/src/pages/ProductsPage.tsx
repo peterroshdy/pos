@@ -635,7 +635,10 @@ export function ProductsPage() {
       </section>
       {productOpen && (
         <div className="modal-backdrop">
-          <form className="modal form-modal" onSubmit={saveProduct}>
+          <form
+            className="modal form-modal product-form-modal"
+            onSubmit={saveProduct}
+          >
             <header>
               <div>
                 <span>
