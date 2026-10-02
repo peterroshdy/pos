@@ -349,28 +349,96 @@ try {
     ),
     "Variant management did not persist edits",
   );
-  const baseIngredient = managedCatalog.ingredients[0];
+  const firstRecipeIngredient = await post("/inventory/items", token, {
+    sku: "INT-RECIPE-01",
+    name: "Integration recipe one",
+    nameAr: "مكون تحقق أول",
+    unit: "grams",
+    stockQuantity: 1000,
+    lowStockAt: 100,
+    costPerUnit: 1,
+  });
+  const secondRecipeIngredient = await post("/inventory/items", token, {
+    sku: "INT-RECIPE-02",
+    name: "Integration recipe two",
+    nameAr: "مكون تحقق ثان",
+    unit: "milliliters",
+    stockQuantity: 1000,
+    lowStockAt: 100,
+    costPerUnit: 1,
+  });
+  const baseIngredient = {
+    id: firstRecipeIngredient.id,
+    unit: "grams",
+    stock_quantity: 1000,
+  };
+  const secondBaseIngredient = {
+    id: secondRecipeIngredient.id,
+    unit: "milliliters",
+    stock_quantity: 1000,
+  };
+  const recipeProduct = await post("/products", token, {
+    categoryId: product.category_id,
+    sku: "INT-RECIPE-PRODUCT",
+    name: "Integration recipe product",
+    nameAr: "منتج تحقق الوصفة",
+    price: 2500,
+    cost: 800,
+    trackStock: false,
+    recipeComponents: [
+      {
+        ingredientId: baseIngredient.id,
+        quantity: 3,
+        unit: baseIngredient.unit,
+      },
+      {
+        ingredientId: secondBaseIngredient.id,
+        quantity: 1,
+        unit: secondBaseIngredient.unit,
+      },
+    ],
+  });
   await request("PATCH", `/products/${product.id}`, token, {
-    ingredientId: baseIngredient.id,
-    estimatedWeight: 5,
-    estimatedWeightUnit: baseIngredient.unit,
+    recipeComponents: [
+      {
+        ingredientId: baseIngredient.id,
+        quantity: 5,
+        unit: baseIngredient.unit,
+      },
+      {
+        ingredientId: secondBaseIngredient.id,
+        quantity: 2,
+        unit: secondBaseIngredient.unit,
+      },
+    ],
   });
   const catalogWithBaseRecipe = await get("/admin/catalog", token);
   check(
-    catalogWithBaseRecipe.recipes.some(
-      (recipe) =>
-        recipe.product_id === product.id &&
-        recipe.variant_id === null &&
-        recipe.inventory_item_id === baseIngredient.id &&
-        recipe.quantity === 5,
-    ),
-    "Base-product ingredient usage did not persist",
+    catalogWithBaseRecipe.recipes.filter(
+      (recipe) => recipe.product_id === recipeProduct.id,
+    ).length === 2,
+    "Creating a product with multiple recipe ingredients did not persist",
   );
-  await request("PATCH", `/products/${product.id}`, token, {
-    ingredientId: "",
-    estimatedWeight: 0,
-    estimatedWeightUnit: baseIngredient.unit,
-  });
+  check(
+    catalogWithBaseRecipe.recipes.filter(
+      (recipe) => recipe.product_id === product.id && recipe.variant_id === null,
+    ).length === 2 &&
+      catalogWithBaseRecipe.recipes.some(
+        (recipe) =>
+          recipe.product_id === product.id &&
+          recipe.variant_id === null &&
+          recipe.inventory_item_id === baseIngredient.id &&
+          recipe.quantity === 5,
+      ) &&
+      catalogWithBaseRecipe.recipes.some(
+        (recipe) =>
+          recipe.product_id === product.id &&
+          recipe.variant_id === null &&
+          recipe.inventory_item_id === secondBaseIngredient.id &&
+          recipe.quantity === 2,
+      ),
+    "Multi-ingredient base recipe did not persist",
+  );
   const held = await post("/orders/hold", baristaToken, {
     shiftId: context.shift.id,
     note: "Verification hold",
@@ -413,6 +481,21 @@ try {
     "Checkout did not enforce the server variant price",
   );
   check(replay.idempotentReplay, "Checkout retry created a duplicate");
+  const inventoryAfterMultiIngredientSale = await get("/inventory", token);
+  const baseIngredientAfterSale = inventoryAfterMultiIngredientSale.ingredients.find(
+    (ingredient) => ingredient.id === baseIngredient.id,
+  );
+  const secondBaseIngredientAfterSale =
+    inventoryAfterMultiIngredientSale.ingredients.find(
+      (ingredient) => ingredient.id === secondBaseIngredient.id,
+    );
+  check(
+    baseIngredientAfterSale.stock_quantity ===
+      baseIngredient.stock_quantity - 10 &&
+      secondBaseIngredientAfterSale.stock_quantity ===
+        secondBaseIngredient.stock_quantity - 4,
+    "Checkout did not deduct every base recipe ingredient by sale quantity",
+  );
   const detail = await get(`/orders/${sale.order.id}`, token);
   check(
     detail.order.history.some(
@@ -477,7 +560,7 @@ try {
     "Sale reversals or branch transfer movements are missing",
   );
   check(
-    inventory.ingredientMovements.length === 4 &&
+    inventory.ingredientMovements.length >= 12 &&
       inventory.ingredientMovements.some(
         (movement) => movement.type === "refund_return",
       ),

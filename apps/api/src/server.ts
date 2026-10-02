@@ -1577,6 +1577,41 @@ app.patch(
   },
 );
 
+type RecipeComponentInput = {
+  ingredientId?: string;
+  quantity?: number;
+  unit?: string;
+};
+
+const insertRecipeComponents = (
+  productId: string,
+  variantId: string | null,
+  components: RecipeComponentInput[],
+  branchId: string,
+) => {
+  const insert = db.prepare(`INSERT INTO recipe_components
+    (id,product_id,variant_id,inventory_item_id,quantity,unit) VALUES (?, ?, ?, ?, ?, ?)`);
+  const seen = new Set<string>();
+  for (const component of components) {
+    const ingredientId = String(component.ingredientId ?? "");
+    const quantity = Number(component.quantity ?? 0);
+    if (!ingredientId && quantity === 0) continue;
+    if (!ingredientId || !Number.isFinite(quantity) || quantity <= 0)
+      throw Object.assign(new Error("Each recipe row requires an ingredient and positive usage"), { statusCode: 400 });
+    if (seen.has(ingredientId))
+      throw Object.assign(new Error("The same ingredient cannot appear twice in one recipe"), { statusCode: 400 });
+    const ingredient = db.prepare(
+      "SELECT id,unit FROM inventory_items WHERE id=? AND branch_id=? AND active=1",
+    ).get(ingredientId, branchId) as { id: string; unit: string } | undefined;
+    if (!ingredient)
+      throw Object.assign(new Error("Selected ingredient was not found in this branch"), { statusCode: 400 });
+    if (component.unit && ingredient.unit !== component.unit)
+      throw Object.assign(new Error("Ingredient usage unit must match its inventory unit"), { statusCode: 400 });
+    seen.add(ingredientId);
+    insert.run(randomUUID(), productId, variantId, ingredient.id, quantity, ingredient.unit);
+  }
+};
+
 app.post(
   "/api/products",
   { preHandler: requirePermission("products.manage") },
@@ -1600,6 +1635,7 @@ app.post(
       ingredientId?: string;
       estimatedWeight?: number;
       estimatedWeightUnit?: string;
+      recipeComponents?: RecipeComponentInput[];
       variants?: Array<{
         name: string;
         nameAr: string;
@@ -1609,6 +1645,7 @@ app.post(
         ingredientId?: string;
         estimatedWeight?: number;
         estimatedWeightUnit?: string;
+        recipeComponents?: RecipeComponentInput[];
         stock?: number;
         lowStockAt?: number;
         trackStock?: boolean;
@@ -1663,27 +1700,12 @@ app.post(
         const variantInsert = db.prepare(`INSERT INTO product_variants
         (id, product_id, name, name_ar, price, cost, sku, estimated_weight, estimated_weight_unit, stock, low_stock_at, track_stock, sort_order, updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
-        const recipeInsert = db.prepare(`INSERT INTO recipe_components
-        (id, product_id, variant_id, inventory_item_id, quantity, unit) VALUES (?, ?, ?, ?, ?, ?)`);
-        if (body.ingredientId && Number(body.estimatedWeight) > 0) {
-          const ingredient = db
-            .prepare(
-              "SELECT id,unit FROM inventory_items WHERE id=? AND branch_id=? AND active=1",
-            )
-            .get(body.ingredientId, request.user.branchId) as
-            { id: string; unit: string } | undefined;
-          if (!ingredient) throw new Error("INVALID_INGREDIENT");
-          if (ingredient.unit !== body.estimatedWeightUnit)
-            throw new Error("INGREDIENT_UNIT_MISMATCH");
-          recipeInsert.run(
-            randomUUID(),
-            id,
-            null,
-            ingredient.id,
-            Number(body.estimatedWeight),
-            ingredient.unit,
-          );
-        }
+        const baseComponents = Array.isArray(body.recipeComponents) ? body.recipeComponents : (body.ingredientId ? [{
+          ingredientId: body.ingredientId,
+          quantity: Number(body.estimatedWeight ?? 0),
+          unit: String(body.estimatedWeightUnit ?? ""),
+        }] : []);
+        insertRecipeComponents(id, null, baseComponents, request.user.branchId);
         (body.variants ?? []).forEach((variant, index) => {
           if (
             !variant.name?.trim() ||
@@ -1710,25 +1732,12 @@ app.post(
             index,
             timestamp,
           );
-          if (variant.ingredientId && Number(variant.estimatedWeight) > 0) {
-            const ingredient = db
-              .prepare(
-                "SELECT id, unit FROM inventory_items WHERE id = ? AND active = 1",
-              )
-              .get(variant.ingredientId) as
-              { id: string; unit: string } | undefined;
-            if (!ingredient) throw new Error("INVALID_INGREDIENT");
-            if (ingredient.unit !== variant.estimatedWeightUnit)
-              throw new Error("INGREDIENT_UNIT_MISMATCH");
-            recipeInsert.run(
-              randomUUID(),
-              id,
-              variantId,
-              ingredient.id,
-              Number(variant.estimatedWeight),
-              ingredient.unit,
-            );
-          }
+          const variantComponents = Array.isArray(variant.recipeComponents) ? variant.recipeComponents : (variant.ingredientId ? [{
+            ingredientId: variant.ingredientId,
+            quantity: Number(variant.estimatedWeight ?? 0),
+            unit: String(variant.estimatedWeightUnit ?? ""),
+          }] : []);
+          insertRecipeComponents(id, variantId, variantComponents, request.user.branchId);
         });
         if (body.branchIds?.length) {
           const branches = db
@@ -1816,7 +1825,7 @@ app.patch(
     const branchIds = Array.isArray(body.branchIds)
       ? body.branchIds.map(String)
       : null;
-    const changesRecipe = Object.hasOwn(body, "ingredientId");
+    const changesRecipe = Object.hasOwn(body, "recipeComponents") || Object.hasOwn(body, "ingredientId");
     if (!updates.length && !branchIds && !changesRecipe)
       return reply.status(400).send({ error: "No editable fields supplied" });
     const timestamp = new Date().toISOString();
@@ -1849,23 +1858,12 @@ app.patch(
         db.prepare(
           "DELETE FROM recipe_components WHERE product_id=? AND variant_id IS NULL",
         ).run(id);
-        const ingredientId = String(body.ingredientId ?? "");
-        const quantity = Number(body.estimatedWeight ?? 0);
-        if (ingredientId && quantity > 0) {
-          const ingredient = db
-            .prepare(
-              "SELECT unit FROM inventory_items WHERE id=? AND branch_id=? AND active=1",
-            )
-            .get(ingredientId, request.user.branchId) as
-            { unit: string } | undefined;
-          if (!ingredient || ingredient.unit !== body.estimatedWeightUnit)
-            throw Object.assign(new Error("Ingredient unit mismatch"), {
-              statusCode: 400,
-            });
-          db.prepare(
-            "INSERT INTO recipe_components (id,product_id,variant_id,inventory_item_id,quantity,unit) VALUES (?, ?, NULL, ?, ?, ?)",
-          ).run(randomUUID(), id, ingredientId, quantity, ingredient.unit);
-        }
+        const components = Array.isArray(body.recipeComponents)
+          ? (body.recipeComponents as RecipeComponentInput[])
+          : body.ingredientId
+            ? [{ ingredientId: String(body.ingredientId), quantity: Number(body.estimatedWeight ?? 0), unit: String(body.estimatedWeightUnit ?? "") }]
+            : [];
+        insertRecipeComponents(id, null, components, request.user.branchId);
       }
     });
     const updated = db.prepare("SELECT * FROM products WHERE id = ?").get(id);
@@ -1904,6 +1902,7 @@ app.post(
       ingredientId?: string;
       estimatedWeight?: number;
       estimatedWeightUnit?: string;
+      recipeComponents?: RecipeComponentInput[];
       stock?: number;
       lowStockAt?: number;
       trackStock?: boolean;
@@ -1941,25 +1940,12 @@ app.post(
         productId,
         timestamp,
       );
-      if (body.ingredientId && Number(body.estimatedWeight) > 0) {
-        const ingredient = db
-          .prepare("SELECT unit FROM inventory_items WHERE id=?")
-          .get(body.ingredientId) as { unit: string } | undefined;
-        if (!ingredient || ingredient.unit !== body.estimatedWeightUnit)
-          throw Object.assign(new Error("Ingredient unit mismatch"), {
-            statusCode: 400,
-          });
-        db.prepare(
-          "INSERT INTO recipe_components (id,product_id,variant_id,inventory_item_id,quantity,unit) VALUES (?, ?, ?, ?, ?, ?)",
-        ).run(
-          randomUUID(),
-          productId,
-          id,
-          body.ingredientId,
-          Number(body.estimatedWeight),
-          ingredient.unit,
-        );
-      }
+      const components = Array.isArray(body.recipeComponents) ? body.recipeComponents : (body.ingredientId ? [{
+        ingredientId: body.ingredientId,
+        quantity: Number(body.estimatedWeight ?? 0),
+        unit: String(body.estimatedWeightUnit ?? ""),
+      }] : []);
+      insertRecipeComponents(productId, id, components, request.user.branchId);
     });
     insertAudit(db, {
       branchId: request.user.branchId,
@@ -2006,7 +1992,9 @@ app.patch(
       active: "active",
     };
     const updates = Object.entries(body).filter(([key]) => key in allowed);
-    const changesRecipe = Object.hasOwn(body, "ingredientId");
+    const changesRecipe =
+      Object.hasOwn(body, "recipeComponents") ||
+      Object.hasOwn(body, "ingredientId");
     if (!updates.length && !changesRecipe)
       return reply.status(400).send({ error: "No editable fields supplied" });
     const values = updates.map(([, value]) =>
@@ -2024,29 +2012,23 @@ app.patch(
         db.prepare("DELETE FROM recipe_components WHERE variant_id = ?").run(
           id,
         );
-        const ingredientId = String(body.ingredientId ?? "");
-        const quantity = Number(body.estimatedWeight ?? 0);
-        if (ingredientId && quantity > 0) {
-          const ingredient = db
-            .prepare(
-              "SELECT unit FROM inventory_items WHERE id = ? AND active = 1",
-            )
-            .get(ingredientId) as { unit: string } | undefined;
-          if (!ingredient || ingredient.unit !== body.estimatedWeightUnit)
-            throw Object.assign(new Error("Ingredient unit mismatch"), {
-              statusCode: 400,
-            });
-          db.prepare(
-            "INSERT INTO recipe_components (id, product_id, variant_id, inventory_item_id, quantity, unit) VALUES (?, ?, ?, ?, ?, ?)",
-          ).run(
-            randomUUID(),
-            String(existing.product_id),
-            id,
-            ingredientId,
-            quantity,
-            ingredient.unit,
-          );
-        }
+        const components = Array.isArray(body.recipeComponents)
+          ? (body.recipeComponents as RecipeComponentInput[])
+          : body.ingredientId
+            ? [
+                {
+                  ingredientId: String(body.ingredientId),
+                  quantity: Number(body.estimatedWeight ?? 0),
+                  unit: String(body.estimatedWeightUnit ?? ""),
+                },
+              ]
+            : [];
+        insertRecipeComponents(
+          String(existing.product_id),
+          id,
+          components,
+          request.user.branchId,
+        );
       }
     });
     const updated = db
@@ -2502,9 +2484,15 @@ app.post(
           }
           const recipes = db
             .prepare(
-              `SELECT rc.*, ii.stock_quantity, ii.name AS ingredient_name FROM recipe_components rc
+              `SELECT rc.inventory_item_id, SUM(rc.quantity) AS quantity,
+                ii.stock_quantity, ii.name AS ingredient_name
+              FROM recipe_components rc
           JOIN inventory_items ii ON ii.id = rc.inventory_item_id
-          WHERE rc.product_id = ? AND ((? IS NULL AND rc.variant_id IS NULL) OR rc.variant_id = ? OR (? IS NOT NULL AND rc.variant_id IS NULL))`,
+          WHERE rc.product_id = ?
+            AND ((? IS NULL AND rc.variant_id IS NULL)
+              OR rc.variant_id = ?
+              OR (? IS NOT NULL AND rc.variant_id IS NULL))
+          GROUP BY rc.inventory_item_id, ii.stock_quantity, ii.name`,
             )
             .all(
               item.productId,

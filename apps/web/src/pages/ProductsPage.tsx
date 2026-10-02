@@ -45,6 +45,11 @@ type Product = {
 };
 type Ingredient = { id: string; name: string; name_ar: string; unit: string };
 type Branch = { id: string; name: string; name_ar: string };
+type RecipeComponentForm = {
+  ingredientId: string;
+  quantity: number;
+  unit: string;
+};
 type VariantForm = {
   id?: string;
   name: string;
@@ -52,9 +57,7 @@ type VariantForm = {
   price: number;
   cost: number;
   sku: string;
-  ingredientId: string;
-  estimatedWeight: number;
-  estimatedWeightUnit: string;
+  recipeComponents: RecipeComponentForm[];
   stock: number;
   lowStockAt: number;
   trackStock: boolean;
@@ -103,11 +106,49 @@ type ProductForm = {
   trackStock: boolean;
   active: boolean;
   branchIds: string[];
-  ingredientId: string;
-  estimatedWeight: number;
-  estimatedWeightUnit: string;
+  recipeComponents: RecipeComponentForm[];
   variants: VariantForm[];
 };
+
+const productSymbolGroups = [
+  {
+    id: "coffee",
+    en: "Coffee & tea",
+    ar: "القهوة والشاي",
+    emojis: ["☕", "🫘", "🫖", "🍵", "🧋", "🥤", "🥛", "🧊"],
+  },
+  {
+    id: "bakery",
+    en: "Bakery",
+    ar: "المخبوزات",
+    emojis: ["🥐", "🥖", "🥯", "🍞", "🥨", "🧇", "🥞", "🍪"],
+  },
+  {
+    id: "desserts",
+    en: "Desserts",
+    ar: "الحلويات",
+    emojis: ["🍰", "🧁", "🍩", "🍮", "🍫", "🍨", "🍦", "🥧"],
+  },
+  {
+    id: "food",
+    en: "Food & snacks",
+    ar: "الطعام والوجبات الخفيفة",
+    emojis: ["🥪", "🥙", "🍔", "🍕", "🌭", "🥗", "🍟", "🍳"],
+  },
+  {
+    id: "ingredients",
+    en: "Ingredients",
+    ar: "المكونات",
+    emojis: ["🍯", "🍓", "🍌", "🍋", "🥥", "🥜", "🌿", "🧀"],
+  },
+  {
+    id: "service",
+    en: "Serving & takeaway",
+    ar: "التقديم والتيك أواي",
+    emojis: ["🥡", "🍽️", "🥄", "🧃", "🫙", "🍴", "📦", "🛍️"],
+  },
+] as const;
+
 const emptyProduct: ProductForm = {
   categoryId: "",
   sku: "",
@@ -125,15 +166,49 @@ const emptyProduct: ProductForm = {
   trackStock: true,
   active: true,
   branchIds: [],
-  ingredientId: "",
-  estimatedWeight: 0,
-  estimatedWeightUnit: "grams",
+  recipeComponents: [],
   variants: [],
 };
 
 export function ProductsPage() {
   const { can } = useAuth();
   const { language, t } = useI18n();
+  const recipeCopy =
+    language === "ar"
+      ? {
+          advanced: "متقدم · الوصفة والخيارات",
+          optional: "اختياري",
+          intro:
+            "اربط المنتج بكل المكونات المستهلكة عند بيع وحدة واحدة. استخدم الخيارات فقط للأحجام أو الاختيارات الفعلية.",
+          ingredients: "مكونات الوصفة",
+          ingredientsHint: "تُخصم كل المكونات معًا عند إتمام كل عملية بيع.",
+          add: "إضافة مكوّن",
+          empty: "لا يوجد استهلاك تلقائي للمكونات.",
+          ingredient: "المكوّن",
+          select: "اختر مكوّنًا",
+          usage: "الاستهلاك لكل وحدة مباعة",
+          remove: "إزالة",
+          optionRecipe: "وصفة الخيار",
+          optionHint: "مكونات إضافية تُستهلك فقط عند اختيار هذا الخيار.",
+        }
+      : {
+          advanced: "Advanced · recipes and variants",
+          optional: "Optional",
+          intro:
+            "Link this product to every ingredient consumed when one item is sold. Variants are only needed for real size or option choices.",
+          ingredients: "Recipe ingredients",
+          ingredientsHint:
+            "All ingredients are deducted together for each completed sale.",
+          add: "Add ingredient",
+          empty: "No automatic ingredient consumption.",
+          ingredient: "Ingredient",
+          select: "Select ingredient",
+          usage: "Usage per sale",
+          remove: "Remove",
+          optionRecipe: "Option recipe",
+          optionHint:
+            "Additional ingredients consumed only when this option is selected.",
+        };
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [ingredients, setIngredients] = useState<Ingredient[]>([]);
@@ -151,6 +226,9 @@ export function ProductsPage() {
     null,
   );
   const [productForm, setProductForm] = useState(emptyProduct);
+  const [symbolCategory, setSymbolCategory] = useState<string>(
+    productSymbolGroups[0].id,
+  );
   const [categoryForm, setCategoryForm] = useState({
     name: "",
     nameAr: "",
@@ -233,24 +311,12 @@ export function ProductsPage() {
     setRemovedVariantIds([]);
     await load();
   };
-  const addVariant = () =>
+  const addIngredient = () =>
     setProductForm({
       ...productForm,
-      variants: [
-        ...productForm.variants,
-        {
-          name: "",
-          nameAr: "",
-          price: productForm.price,
-          cost: productForm.cost,
-          sku: "",
-          ingredientId: "",
-          estimatedWeight: 0,
-          estimatedWeightUnit: "grams",
-          stock: 0,
-          lowStockAt: 0,
-          trackStock: false,
-        },
+      recipeComponents: [
+        ...productForm.recipeComponents,
+        { ingredientId: "", quantity: 0, unit: "grams" },
       ],
     });
   const updateVariant = (index: number, changes: Partial<VariantForm>) =>
@@ -280,7 +346,7 @@ export function ProductsPage() {
     const productAvailability = availability.filter(
       (item) => item.product_id === product.id,
     );
-    const baseRecipe = recipes.find(
+    const baseRecipes = recipes.filter(
       (item) => item.variant_id === null && item.product_id === product.id,
     );
     setProductForm({
@@ -304,15 +370,17 @@ export function ProductsPage() {
             .filter((item) => Boolean(item.available))
             .map((item) => item.branch_id)
         : branches.map((item) => item.id),
-      ingredientId: baseRecipe?.inventory_item_id ?? "",
-      estimatedWeight: baseRecipe?.quantity ?? 0,
-      estimatedWeightUnit: baseRecipe?.unit ?? "grams",
+      recipeComponents: baseRecipes.map((recipe) => ({
+        ingredientId: recipe.inventory_item_id,
+        quantity: recipe.quantity,
+        unit: recipe.unit,
+      })),
       variants: variants
         .filter(
           (variant) => variant.product_id === product.id && variant.active,
         )
         .map((variant) => {
-          const recipe = recipes.find((item) => item.variant_id === variant.id);
+          const variantRecipes = recipes.filter((item) => item.variant_id === variant.id);
           return {
             id: variant.id,
             name: variant.name,
@@ -320,10 +388,11 @@ export function ProductsPage() {
             price: variant.price / 100,
             cost: variant.cost / 100,
             sku: variant.sku ?? "",
-            ingredientId: recipe?.inventory_item_id ?? "",
-            estimatedWeight: recipe?.quantity ?? variant.estimated_weight ?? 0,
-            estimatedWeightUnit:
-              recipe?.unit ?? variant.estimated_weight_unit ?? "grams",
+            recipeComponents: variantRecipes.map((recipe) => ({
+              ingredientId: recipe.inventory_item_id,
+              quantity: recipe.quantity,
+              unit: recipe.unit,
+            })),
             stock: variant.stock,
             lowStockAt: variant.low_stock_at,
             trackStock: variant.track_stock,
@@ -730,16 +799,69 @@ export function ProductsPage() {
               </label>
             </div>
             <div className="field-row">
-              <label className="field">
-                <span>Product symbol</span>
-                <input
-                  value={productForm.image}
-                  maxLength={4}
-                  onChange={(e) =>
-                    setProductForm({ ...productForm, image: e.target.value })
-                  }
-                />
-              </label>
+              <div className="field product-symbol-field">
+                <span>
+                  {language === "ar" ? "رمز المنتج" : "Product symbol"}
+                </span>
+                <details className="product-symbol-picker">
+                  <summary>
+                    <b>{productForm.image}</b>
+                    <span>
+                      {language === "ar"
+                        ? "اختر رمزًا مناسبًا"
+                        : "Choose a relevant symbol"}
+                    </span>
+                  </summary>
+                  <div>
+                    <nav
+                      aria-label={
+                        language === "ar"
+                          ? "فئات رموز المنتجات"
+                          : "Product symbol categories"
+                      }
+                    >
+                      {productSymbolGroups.map((group) => (
+                        <button
+                          type="button"
+                          className={
+                            symbolCategory === group.id ? "active" : ""
+                          }
+                          key={group.id}
+                          onClick={() => setSymbolCategory(group.id)}
+                        >
+                          {language === "ar" ? group.ar : group.en}
+                        </button>
+                      ))}
+                    </nav>
+                    <div className="product-symbol-grid">
+                      {productSymbolGroups
+                        .find((group) => group.id === symbolCategory)!
+                        .emojis.map((emoji) => (
+                          <button
+                            type="button"
+                            className={
+                              productForm.image === emoji ? "selected" : ""
+                            }
+                            key={emoji}
+                            title={
+                              language === "ar"
+                                ? "اختيار هذا الرمز"
+                                : "Use this symbol"
+                            }
+                            aria-label={`${
+                              language === "ar" ? "اختيار" : "Choose"
+                            } ${emoji}`}
+                            onClick={() =>
+                              setProductForm({ ...productForm, image: emoji })
+                            }
+                          >
+                            {emoji}
+                          </button>
+                        ))}
+                    </div>
+                  </div>
+                </details>
+              </div>
               <label className="field">
                 <span>Card color</span>
                 <input
@@ -770,63 +892,123 @@ export function ProductsPage() {
             </label>
             <details className="advanced-fields">
               <summary>
-                Advanced · variants and estimated usage{" "}
-                <span>{productForm.variants.length || "Optional"}</span>
+                {recipeCopy.advanced}{" "}
+                <span>
+                  {productForm.recipeComponents.length +
+                    productForm.variants.length || recipeCopy.optional}
+                </span>
               </summary>
               <div>
-                <p>
-                  Link the base product or its options to ingredients for
-                  automatic theoretical consumption.
-                </p>
-                <div className="field-row">
-                  <label className="field">
-                    <span>Base ingredient · optional</span>
-                    <select
-                      value={productForm.ingredientId}
-                      onChange={(event) => {
-                        const ingredient = ingredients.find(
-                          (item) => item.id === event.target.value,
-                        );
+                <p>{recipeCopy.intro}</p>
+                <div className="recipe-builder">
+                  <header>
+                    <div>
+                      <strong>{recipeCopy.ingredients}</strong>
+                      <small>{recipeCopy.ingredientsHint}</small>
+                    </div>
+                    <button
+                      type="button"
+                      className="soft-button small"
+                      onClick={() =>
                         setProductForm({
                           ...productForm,
-                          ingredientId: event.target.value,
-                          estimatedWeightUnit:
-                            ingredient?.unit ?? productForm.estimatedWeightUnit,
-                        });
-                      }}
+                          recipeComponents: [
+                            ...productForm.recipeComponents,
+                            { ingredientId: "", quantity: 0, unit: "grams" },
+                          ],
+                        })
+                      }
                     >
-                      <option value="">No automatic consumption</option>
-                      {ingredients.map((item) => (
-                        <option key={item.id} value={item.id}>
-                          {language === "ar" ? item.name_ar : item.name} ·{" "}
-                          {item.unit}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="field">
-                    <span>Base estimated usage</span>
-                    <div className="inline-fields">
-                      <input
-                        type="number"
-                        min="0"
-                        step=".1"
-                        value={productForm.estimatedWeight || ""}
-                        disabled={!productForm.ingredientId}
-                        onChange={(event) =>
+                      <Plus size={16} /> {recipeCopy.add}
+                    </button>
+                  </header>
+                  {!productForm.recipeComponents.length && (
+                    <p className="recipe-empty">{recipeCopy.empty}</p>
+                  )}
+                  {productForm.recipeComponents.map((component, componentIndex) => (
+                    <div className="recipe-component-row" key={componentIndex}>
+                      <label className="field">
+                        <span>{recipeCopy.ingredient}</span>
+                        <select
+                          required
+                          value={component.ingredientId}
+                          onChange={(event) => {
+                            const ingredient = ingredients.find(
+                              (item) => item.id === event.target.value,
+                            );
+                            setProductForm({
+                              ...productForm,
+                              recipeComponents: productForm.recipeComponents.map(
+                                (row, index) =>
+                                  index === componentIndex
+                                    ? {
+                                        ...row,
+                                        ingredientId: event.target.value,
+                                        unit: ingredient?.unit ?? row.unit,
+                                      }
+                                    : row,
+                              ),
+                            });
+                          }}
+                        >
+                          <option value="">{recipeCopy.select}</option>
+                          {ingredients.map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {language === "ar" ? item.name_ar : item.name} ·{" "}
+                              {item.unit}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>{recipeCopy.usage}</span>
+                        <div className="inline-fields">
+                          <input
+                            required
+                            type="number"
+                            min="0.001"
+                            step="any"
+                            value={component.quantity || ""}
+                            onChange={(event) =>
+                              setProductForm({
+                                ...productForm,
+                                recipeComponents:
+                                  productForm.recipeComponents.map(
+                                    (row, index) =>
+                                      index === componentIndex
+                                        ? {
+                                            ...row,
+                                            quantity: Number(event.target.value),
+                                          }
+                                        : row,
+                                  ),
+                              })
+                            }
+                          />
+                          <input
+                            value={component.unit}
+                            disabled
+                            aria-label="Ingredient unit"
+                          />
+                        </div>
+                      </label>
+                      <button
+                        type="button"
+                        className="recipe-remove"
+                        onClick={() =>
                           setProductForm({
                             ...productForm,
-                            estimatedWeight: Number(event.target.value),
+                            recipeComponents:
+                              productForm.recipeComponents.filter(
+                                (_, index) => index !== componentIndex,
+                              ),
                           })
                         }
-                      />
-                      <input
-                        value={productForm.estimatedWeightUnit}
-                        disabled
-                        aria-label="Base usage unit"
-                      />
+                      >
+                        {recipeCopy.remove}
+                      </button>
                     </div>
-                  </label>
+                  ))}
                 </div>
                 <label className="field">
                   <span>Internal notes</span>
@@ -910,30 +1092,6 @@ export function ProductsPage() {
                     </div>
                     <div className="field-row">
                       <label className="field">
-                        <span>Ingredient · optional</span>
-                        <select
-                          value={variant.ingredientId}
-                          onChange={(e) => {
-                            const ingredient = ingredients.find(
-                              (item) => item.id === e.target.value,
-                            );
-                            updateVariant(index, {
-                              ingredientId: e.target.value,
-                              estimatedWeightUnit:
-                                ingredient?.unit ?? variant.estimatedWeightUnit,
-                            });
-                          }}
-                        >
-                          <option value="">No automatic consumption</option>
-                          {ingredients.map((item) => (
-                            <option key={item.id} value={item.id}>
-                              {language === "ar" ? item.name_ar : item.name} ·{" "}
-                              {item.unit}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className="field">
                         <span>Variant SKU · optional</span>
                         <input
                           value={variant.sku}
@@ -972,38 +1130,116 @@ export function ProductsPage() {
                           }
                         />
                       </label>
-                      <label>
-                        Est. usage
-                        <input
-                          type="number"
-                          min="0"
-                          step=".1"
-                          value={variant.estimatedWeight || ""}
-                          onChange={(e) =>
+                    </div>
+                    <div className="recipe-builder recipe-builder--variant">
+                      <header>
+                        <div>
+                          <strong>{recipeCopy.optionRecipe}</strong>
+                          <small>{recipeCopy.optionHint}</small>
+                        </div>
+                        <button
+                          type="button"
+                          className="soft-button small"
+                          onClick={() =>
                             updateVariant(index, {
-                              estimatedWeight: Number(e.target.value),
-                            })
-                          }
-                        />
-                      </label>
-                      <label>
-                        Unit
-                        <select
-                          value={variant.estimatedWeightUnit}
-                          disabled={Boolean(variant.ingredientId)}
-                          onChange={(e) =>
-                            updateVariant(index, {
-                              estimatedWeightUnit: e.target.value,
+                              recipeComponents: [
+                                ...variant.recipeComponents,
+                                {
+                                  ingredientId: "",
+                                  quantity: 0,
+                                  unit: "grams",
+                                },
+                              ],
                             })
                           }
                         >
-                          <option>grams</option>
-                          <option>kilograms</option>
-                          <option>milliliters</option>
-                          <option>liters</option>
-                          <option>pieces</option>
-                        </select>
-                      </label>
+                          <Plus size={15} /> {recipeCopy.add}
+                        </button>
+                      </header>
+                      {variant.recipeComponents.map((component, componentIndex) => (
+                        <div className="recipe-component-row" key={componentIndex}>
+                          <label className="field">
+                            <span>{recipeCopy.ingredient}</span>
+                            <select
+                              required
+                              value={component.ingredientId}
+                              onChange={(event) => {
+                                const ingredient = ingredients.find(
+                                  (item) => item.id === event.target.value,
+                                );
+                                updateVariant(index, {
+                                  recipeComponents:
+                                    variant.recipeComponents.map(
+                                      (row, position) =>
+                                        position === componentIndex
+                                          ? {
+                                              ...row,
+                                              ingredientId: event.target.value,
+                                              unit:
+                                                ingredient?.unit ?? row.unit,
+                                            }
+                                          : row,
+                                    ),
+                                });
+                              }}
+                            >
+                              <option value="">{recipeCopy.select}</option>
+                              {ingredients.map((item) => (
+                                <option key={item.id} value={item.id}>
+                                  {language === "ar"
+                                    ? item.name_ar
+                                    : item.name}{" "}
+                                  · {item.unit}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          <label className="field">
+                            <span>{recipeCopy.usage}</span>
+                            <div className="inline-fields">
+                              <input
+                                required
+                                type="number"
+                                min="0.001"
+                                step="any"
+                                value={component.quantity || ""}
+                                onChange={(event) =>
+                                  updateVariant(index, {
+                                    recipeComponents:
+                                      variant.recipeComponents.map(
+                                        (row, position) =>
+                                          position === componentIndex
+                                            ? {
+                                                ...row,
+                                                quantity: Number(
+                                                  event.target.value,
+                                                ),
+                                              }
+                                            : row,
+                                      ),
+                                  })
+                                }
+                              />
+                              <input value={component.unit} disabled />
+                            </div>
+                          </label>
+                          <button
+                            type="button"
+                            className="recipe-remove"
+                            onClick={() =>
+                              updateVariant(index, {
+                                recipeComponents:
+                                  variant.recipeComponents.filter(
+                                    (_, position) =>
+                                      position !== componentIndex,
+                                  ),
+                              })
+                            }
+                          >
+                            {recipeCopy.remove}
+                          </button>
+                        </div>
+                      ))}
                     </div>
                     <label className="switch-field variant-stock-switch">
                       <input
@@ -1058,9 +1294,9 @@ export function ProductsPage() {
                 <button
                   type="button"
                   className="soft-button"
-                  onClick={addVariant}
+                  onClick={addIngredient}
                 >
-                  <Plus /> Add variant
+                  <Plus /> {recipeCopy.add}
                 </button>
               </div>
             </details>
