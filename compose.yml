@@ -1,0 +1,32 @@
+services:
+  branch:
+    build:
+      context: .
+    container_name: talk-and-taste-branch
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 4100
+      DATABASE_PATH: /data/token-taste.db
+      BUSINESS_TIMEZONE: ${BUSINESS_TIMEZONE:-Africa/Cairo}
+      JWT_SECRET: ${JWT_SECRET:-}
+      BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
+      BOOTSTRAP_ADMIN_PIN: ${BOOTSTRAP_ADMIN_PIN:-}
+      CLOUD_ENROLLMENT_URL: ${CLOUD_ENROLLMENT_URL:-https://157.173.194.66}
+      CASH_DRAWER_COMMAND_URL: ${CASH_DRAWER_COMMAND_URL:-}
+      CASH_DRAWER_COMMAND_TOKEN: ${CASH_DRAWER_COMMAND_TOKEN:-}
+    ports:
+      - "${APP_PORT:-8080}:4100"
+    volumes:
+      - token_taste_data:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4100/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  token_taste_data:

@@ -1,0 +1,31 @@
+services:
+  cloud:
+    build:
+      context: .
+    container_name: talk-and-taste-cloud
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 4100
+      DATABASE_PATH: /data/token-taste-cloud.db
+      BUSINESS_TIMEZONE: ${BUSINESS_TIMEZONE:-Africa/Cairo}
+      JWT_SECRET: ${CLOUD_JWT_SECRET:?Set CLOUD_JWT_SECRET in .env}
+      BOOTSTRAP_ADMIN_PASSWORD: ${CLOUD_ADMIN_PASSWORD:?Set CLOUD_ADMIN_PASSWORD in .env}
+      CLOUD_RECEIVER_ENABLED: "true"
+      CLOUD_BRANCH_TOKENS: ${CLOUD_BRANCH_TOKENS:-{}}
+      CLOUD_DEVICE_TOKENS: ${CLOUD_DEVICE_TOKENS:-{}}
+    ports:
+      - "127.0.0.1:${CLOUD_APP_PORT:-8443}:4100"
+    volumes:
+      - token_taste_cloud_data:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4100/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  token_taste_cloud_data:

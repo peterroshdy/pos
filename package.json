@@ -1,0 +1,27 @@
+{
+  "name": "talk-and-taste",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Local-first bilingual cafe POS and management system",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,web -c '#8b6657,#c89160' 'npm run dev -w @token-taste/api' 'npm run dev -w @token-taste/web'",
+    "build": "npm run build -w @token-taste/shared && npm run build -w @token-taste/api && npm run build -w @token-taste/web",
+    "test": "npm run test -w @token-taste/api && npm run test -w @token-taste/web",
+    "verify": "npm run typecheck && npm test && npm run build && npm run verify:first-run && npm run verify:integration",
+    "verify:first-run": "node scripts/verify-first-run.mjs",
+    "verify:integration": "node scripts/verify-integration.mjs",
+    "typecheck": "npm run build -w @token-taste/shared && npm run typecheck -w @token-taste/api && npm run typecheck -w @token-taste/web",
+    "start": "npm run start -w @token-taste/api"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "playwright": "^1.63.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
