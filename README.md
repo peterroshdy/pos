@@ -27,12 +27,14 @@ The current testing branch is **City Stars Branch**.
 
 ## Windows branch setup
 
-1. Install and start Docker Desktop.
+1. Install Docker Desktop once.
 2. Extract the Talk & TASTE folder.
 3. Double-click `windows\Start Talk & TASTE.cmd`.
 4. On first launch, choose the `admin` password and the `Barista` password.
 
-No `.env`, branch ID, device ID, JWT secret, or terminal command is required. The launcher builds the app, waits until it is healthy, and opens `http://localhost:8080`.
+No `.env`, branch ID, device ID, JWT secret, or terminal command is required. The launcher starts Docker Desktop when necessary, builds the app, waits until it is healthy, opens `http://localhost:8080`, and installs a per-user Windows startup shortcut automatically.
+
+After a Windows restart and user login, that shortcut starts Docker Desktop, starts the existing POS container without rebuilding it, waits for the local health check, and opens `http://localhost:8080` automatically. Docker's `unless-stopped` policy also restarts the application process after a crash. The named `token_taste_data` Docker volume is not recreated, so users, the generated JWT secret, the paired branch identity, orders, held orders, the sync queue, and an open shift survive both application and Windows restarts. A Barista can sign in again and continue the same open shift; shifts are closed only through the counted-cash closing flow.
 
 The installation can work offline for weeks. Orders, shifts, inventory movements, treasury records, and audit events commit to its local SQLite volume and enter a durable synchronization queue. Pairing can happen later:
 
@@ -42,6 +44,32 @@ The installation can work offline for weeks. Orders, shifts, inventory movements
 4. Enter it under **Settings → Cloud synchronization** on the Windows machine.
 
 The installation then uploads its complete queued history. Future interruptions retry automatically. Back up the Windows device or Docker volume while unsynchronized data exists only locally.
+
+Each committed operation writes its business record and durable outbox event to the same local SQLite database. The sync worker runs at startup and every 15 seconds, uploads in sequence, uses idempotent event IDs, and retries failures with backoff up to five minutes. Internet loss never blocks checkout. Cloud-to-branch inventory transfers are also downloaded from the authenticated inbox. The cloud Admin receives branch transaction, shift, treasury, inventory, customer, staff, settings, and audit events; the local database remains the checkout source of truth.
+
+## Windows support and troubleshooting
+
+If the POS is unavailable, first double-click `windows\Create Support Bundle.cmd` so the failure evidence is preserved, then double-click `windows\Start Talk & TASTE.cmd`. The start launcher safely starts Docker Desktop and the existing container; it does not erase or replace the data volume.
+
+The support tool creates a timestamped ZIP on the Windows Desktop containing:
+
+- Windows boot and disk information
+- Docker and container status
+- the latest 1,000 application log lines
+- local health-check output
+- cloud reachability status
+- launcher logs
+
+The bundle deliberately excludes the SQLite database, passwords, tokens, and container environment. Send that ZIP to support. Do not run `docker compose down -v`, delete the `token_taste_data` volume, reset Docker Desktop, or uninstall Docker while unsynchronized local data exists.
+
+Manual diagnostic commands, when support requests them:
+
+```powershell
+docker compose -f compose.yml ps
+docker compose -f compose.yml logs --tail 200 branch
+docker compose -f compose.yml restart branch
+Invoke-RestMethod http://localhost:8080/api/health
+```
 
 ## Infrastructure
 
@@ -74,9 +102,10 @@ npm test
 npm run build
 npm run verify:first-run
 npm run verify:integration
+npm run verify:restart
 npm audit --audit-level=high
 docker compose config
 docker compose -f compose.cloud.yml config
 ```
 
-The cloud service is published at `https://157.173.194.66` through nginx. The application port and SQLite databases remain private.
+The cloud service is published at `https://admin.talkandtaste.app` through nginx. The application port and SQLite databases remain private.

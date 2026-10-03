@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Banknote, CalendarDays, Clock3, RefreshCw, Users, WalletCards } from "lucide-react";
+import { Fragment, useEffect, useMemo, useState } from "react";
+import { Banknote, CalendarDays, ChevronDown, ChevronRight, Clock3, RefreshCw, Users, WalletCards } from "lucide-react";
 import { formatMoney } from "@token-taste/shared";
 import { api } from "../api";
 import { useI18n } from "../i18n";
@@ -47,6 +47,27 @@ type RollingUser = {
   credit_sales: number;
 };
 
+type ShiftGroup = {
+  id: string;
+  user_id: string;
+  user_name: string;
+  user_name_ar: string;
+  branch_name: string;
+  branch_name_ar: string;
+  status: "open" | "closed";
+  opened_at: string;
+  closed_at: string | null;
+  duration_minutes: number;
+  orders: number;
+  net_sales: number;
+  cash_sales: number;
+  opening_cash: number;
+  expected_cash: number;
+  closing_cash: number | null;
+  difference: number | null;
+  shifts: ShiftRow[];
+};
+
 type ShiftData = {
   from: string;
   to: string;
@@ -80,7 +101,72 @@ export function ShiftsPage() {
   const [status, setStatus] = useState("");
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<ShiftData | null>(null);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const money = (value: number) => formatMoney(value, language);
+
+  const shiftGroups = useMemo(() => {
+    const grouped = new Map<string, ShiftGroup>();
+    for (const shift of data?.shifts ?? []) {
+      const id = `${shift.user_id}:${shift.branch_name}:${shift.status}`;
+      const expected = shift.status === "open"
+        ? shift.opening_cash + shift.cash_movements
+        : (shift.expected_cash ?? 0);
+      const current = grouped.get(id);
+      if (!current) {
+        grouped.set(id, {
+          id,
+          user_id: shift.user_id,
+          user_name: shift.user_name,
+          user_name_ar: shift.user_name_ar,
+          branch_name: shift.branch_name,
+          branch_name_ar: shift.branch_name_ar,
+          status: shift.status,
+          opened_at: shift.opened_at,
+          closed_at: shift.closed_at,
+          duration_minutes: shift.duration_minutes,
+          orders: shift.orders,
+          net_sales: shift.net_sales,
+          cash_sales: shift.cash_sales,
+          opening_cash: shift.opening_cash,
+          expected_cash: expected,
+          closing_cash: shift.closing_cash,
+          difference: shift.difference,
+          shifts: [shift],
+        });
+        continue;
+      }
+      current.opened_at = current.opened_at < shift.opened_at
+        ? current.opened_at
+        : shift.opened_at;
+      if (shift.closed_at)
+        current.closed_at = !current.closed_at || shift.closed_at > current.closed_at
+          ? shift.closed_at
+          : current.closed_at;
+      current.duration_minutes += shift.duration_minutes;
+      current.orders += shift.orders;
+      current.net_sales += shift.net_sales;
+      current.cash_sales += shift.cash_sales;
+      current.opening_cash += shift.opening_cash;
+      current.expected_cash += expected;
+      if (shift.closing_cash != null)
+        current.closing_cash = (current.closing_cash ?? 0) + shift.closing_cash;
+      if (shift.difference != null)
+        current.difference = (current.difference ?? 0) + shift.difference;
+      current.shifts.push(shift);
+    }
+    return [...grouped.values()].sort((left, right) =>
+      right.opened_at.localeCompare(left.opened_at),
+    );
+  }, [data?.shifts]);
+
+  const toggleGroup = (id: string) => {
+    setExpandedGroups((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const load = async (start = from, end = to) => {
     setLoading(true);
@@ -105,7 +191,7 @@ export function ShiftsPage() {
   };
 
   return (
-    <div className="content-page shifts-page">
+    <div className="content-page shifts-page" aria-busy={loading}>
       <div className="page-heading">
         <div>
           <h2>{tr("Shifts", "الورديات")}</h2>
@@ -138,7 +224,7 @@ export function ShiftsPage() {
       </section>
 
       <section className="panel shifts-rollup">
-        <div className="panel-heading"><div><h3>{tr("Past 24 hours by Barista", "آخر ٢٤ ساعة لكل باريستا")}</h3><p>{tr("Multiple shifts are combined for each employee.", "يتم تجميع الورديات المتعددة لكل موظف.")}</p></div></div>
+        <header className="panel-heading"><div><h3>{tr("Past 24 hours by staff member", "آخر ٢٤ ساعة لكل موظف")}</h3><p>{tr("Multiple shifts are combined for each employee.", "يتم تجميع الورديات المتعددة لكل موظف.")}</p></div></header>
         <div className="shift-user-grid">
           {data?.rolling24.map((user) => <article key={user.user_id}>
             <header><span>{(language === "ar" ? user.user_name_ar : user.user_name).slice(0, 2)}</span><div><strong>{language === "ar" ? user.user_name_ar : user.user_name}</strong><small>{user.shifts} {tr("shifts", "ورديات")} · {duration(user.minutes, language)}</small></div></header>
@@ -152,10 +238,26 @@ export function ShiftsPage() {
         </div>
       </section>
 
-      <section className="panel">
-        <div className="panel-heading"><div><h3>{tr("Shift records", "سجل الورديات")}</h3><p>{tr("One row per opening and closing cycle.", "صف واحد لكل دورة فتح وإغلاق.")}</p></div></div>
+      <section className="panel shift-records">
+        <header className="panel-heading"><div><h3>{tr("Shift records", "سجل الورديات")}</h3><p>{tr("Operational POS staff only — administrative accounts are excluded.", "موظفو نقاط البيع فقط — الحسابات الإدارية مستبعدة.")}</p></div></header>
         <div className="table-wrap"><table><thead><tr><th>{tr("Employee", "الموظف")}</th><th>{tr("Branch", "الفرع")}</th><th>{tr("Opened", "الفتح")}</th><th>{tr("Closed", "الإغلاق")}</th><th>{tr("Duration", "المدة")}</th><th>{tr("Orders", "الطلبات")}</th><th>{tr("Sales", "المبيعات")}</th><th>{tr("Cash", "النقد")}</th><th>{tr("Opening", "الافتتاحي")}</th><th>{tr("Expected", "المتوقع")}</th><th>{tr("Counted", "المعدود")}</th><th>{tr("Difference", "الفارق")}</th><th>{tr("Status", "الحالة")}</th></tr></thead>
-          <tbody>{data?.shifts.map((shift) => <tr key={shift.id}><td><strong>{language === "ar" ? shift.user_name_ar : shift.user_name}</strong></td><td>{language === "ar" ? shift.branch_name_ar : shift.branch_name}</td><td>{new Date(shift.opened_at).toLocaleString(language === "ar" ? "ar-EG" : "en-GB")}</td><td>{shift.closed_at ? new Date(shift.closed_at).toLocaleString(language === "ar" ? "ar-EG" : "en-GB") : "—"}</td><td>{duration(shift.duration_minutes, language)}</td><td>{shift.orders}</td><td>{money(shift.net_sales)}</td><td>{money(shift.cash_sales)}</td><td>{money(shift.opening_cash)}</td><td>{shift.status === "open" ? money(shift.opening_cash + shift.cash_movements) : money(shift.expected_cash ?? 0)}</td><td>{shift.closing_cash == null ? "—" : money(shift.closing_cash)}</td><td className={(shift.difference ?? 0) === 0 ? "positive" : "negative"}>{shift.difference == null ? "—" : money(shift.difference)}</td><td><StatusBadge value={shift.status} /></td></tr>)}</tbody></table></div>
+          <tbody>{shiftGroups.map((group) => {
+            const expandable = group.shifts.length > 1;
+            const expanded = expandedGroups.has(group.id);
+            const negative = group.status === "closed" && (group.difference ?? 0) < 0;
+            return <Fragment key={group.id}>
+              <tr className={`shift-row--grouped${negative ? " shift-row--negative" : ""}`}>
+                <td><div className="shift-group-employee">{expandable ? <button type="button" onClick={() => toggleGroup(group.id)} aria-expanded={expanded} aria-label={expanded ? tr("Collapse shift details", "إخفاء تفاصيل الورديات") : tr("Expand shift details", "عرض تفاصيل الورديات")}>{expanded ? <ChevronDown /> : <ChevronRight />}</button> : <i />}<span><strong>{language === "ar" ? group.user_name_ar : group.user_name}</strong><small>{group.shifts.length} {tr(group.shifts.length === 1 ? "shift" : "shifts", group.shifts.length === 1 ? "وردية" : "ورديات")}</small></span></div></td>
+                <td>{language === "ar" ? group.branch_name_ar : group.branch_name}</td>
+                <td>{new Date(group.opened_at).toLocaleString(language === "ar" ? "ar-EG" : "en-GB")}</td>
+                <td>{group.closed_at ? new Date(group.closed_at).toLocaleString(language === "ar" ? "ar-EG" : "en-GB") : "—"}</td>
+                <td>{duration(group.duration_minutes, language)}</td><td>{group.orders}</td><td>{money(group.net_sales)}</td><td>{money(group.cash_sales)}</td><td>{money(group.opening_cash)}</td><td>{money(group.expected_cash)}</td><td>{group.closing_cash == null ? "—" : money(group.closing_cash)}</td><td className={(group.difference ?? 0) === 0 ? "positive" : "negative"}>{group.difference == null ? "—" : money(group.difference)}</td><td><StatusBadge value={group.status} /></td>
+              </tr>
+              {expanded && group.shifts.map((shift, index) => <tr className={`shift-row--detail${shift.status === "closed" && (shift.difference ?? 0) < 0 ? " shift-row--negative" : ""}`} key={shift.id}>
+                <td><div className="shift-detail-name"><i /><span><strong>{language === "ar" ? shift.user_name_ar : shift.user_name}</strong><small>{tr(`Shift ${index + 1} of ${group.shifts.length}`, `وردية ${index + 1} من ${group.shifts.length}`)}</small></span></div></td><td>{language === "ar" ? shift.branch_name_ar : shift.branch_name}</td><td>{new Date(shift.opened_at).toLocaleString(language === "ar" ? "ar-EG" : "en-GB")}</td><td>{shift.closed_at ? new Date(shift.closed_at).toLocaleString(language === "ar" ? "ar-EG" : "en-GB") : "—"}</td><td>{duration(shift.duration_minutes, language)}</td><td>{shift.orders}</td><td>{money(shift.net_sales)}</td><td>{money(shift.cash_sales)}</td><td>{money(shift.opening_cash)}</td><td>{shift.status === "open" ? money(shift.opening_cash + shift.cash_movements) : money(shift.expected_cash ?? 0)}</td><td>{shift.closing_cash == null ? "—" : money(shift.closing_cash)}</td><td className={(shift.difference ?? 0) === 0 ? "positive" : "negative"}>{shift.difference == null ? "—" : money(shift.difference)}</td><td><StatusBadge value={shift.status} /></td>
+              </tr>)}
+            </Fragment>;
+          })}</tbody></table></div>
       </section>
     </div>
   );

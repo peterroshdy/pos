@@ -14,6 +14,7 @@
     "verify": "npm run typecheck && npm test && npm run build && npm run verify:first-run && npm run verify:integration",
     "verify:first-run": "node scripts/verify-first-run.mjs",
     "verify:integration": "node scripts/verify-integration.mjs",
+    "verify:restart": "node scripts/verify-docker-restart.mjs",
     "typecheck": "npm run build -w @token-taste/shared && npm run typecheck -w @token-taste/api && npm run typecheck -w @token-taste/web",
     "start": "npm run start -w @token-taste/api"
   },

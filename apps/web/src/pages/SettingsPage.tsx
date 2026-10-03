@@ -16,6 +16,7 @@ type SettingsData = {
 };
 
 type SyncStatus = {
+  mode: "branch" | "cloud";
   paired: boolean;
   state: "synced" | "pending" | "error" | "offline";
   pending: number;
@@ -66,9 +67,15 @@ export function SettingsPage() {
     <div className="content-page">
       <div className="page-heading">
         <div>
-          <span className="eyebrow">Branch configuration</span>
+          <span className="eyebrow">
+            {sync?.mode === "cloud" ? "Cloud configuration" : "Branch configuration"}
+          </span>
           <h2>{t("settings")}</h2>
-          <p>Safe defaults for this local branch installation.</p>
+          <p>
+            {sync?.mode === "cloud"
+              ? "Administration and business defaults for the cloud service."
+              : "Safe defaults for this local branch installation."}
+          </p>
         </div>
       </div>
       <div className="settings-layout">
@@ -341,7 +348,18 @@ export function SettingsPage() {
               </div>
             </header>
             <div className="settings-body">
-              {sync?.paired ? (
+              {sync?.mode === "cloud" ? (
+                <div className="config-note">
+                  <ShieldCheck />
+                  <div>
+                    <strong>Cloud service online</strong>
+                    <p>
+                      This is the central administration service. Paired branch
+                      devices upload their operational data here automatically.
+                    </p>
+                  </div>
+                </div>
+              ) : sync?.paired ? (
                 <div className="config-note">
                   <ShieldCheck />
                   <div>

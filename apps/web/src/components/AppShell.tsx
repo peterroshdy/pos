@@ -103,6 +103,7 @@ const navItems: Array<{
 ];
 
 type SyncStatus = {
+  mode: "branch" | "cloud";
   state: "synced" | "pending" | "error" | "offline";
   pending: number;
   failed: number;
@@ -117,6 +118,7 @@ export function AppShell() {
   const [globalSearch, setGlobalSearch] = useState("");
   const [apiError, setApiError] = useState("");
   const [sync, setSync] = useState<SyncStatus>({
+    mode: "branch",
     state: "offline",
     pending: 0,
     failed: 0,
@@ -272,7 +274,9 @@ export function AppShell() {
                 <Wifi size={15} />
               )}
               <span>
-                {sync.state === "synced"
+                {sync.mode === "cloud"
+                  ? t("cloudOnline")
+                  : sync.state === "synced"
                   ? t("synced")
                   : sync.state === "offline"
                     ? t("offline")

@@ -141,6 +141,30 @@ try {
   check(blockedBaristaSettings.response.status === 403, "Barista reached Admin settings");
   check(blockedAdminPos.response.status === 403, "Admin retained POS access");
 
+  const openedShift = await request(
+    local.base,
+    "POST",
+    "/shifts/open",
+    baristaLogin.data.token,
+    { openingCash: 12500 },
+  );
+  check(
+    openedShift.response.status === 201,
+    "Offline Barista could not open a shift",
+  );
+  const shiftBeforeRestart = await request(
+    local.base,
+    "GET",
+    "/pos/context",
+    baristaLogin.data.token,
+  );
+  check(
+    shiftBeforeRestart.data.shift?.id === openedShift.data.id &&
+      Date.now() - Date.parse(shiftBeforeRestart.data.shift.opened_at) <
+        24 * 60 * 60 * 1000,
+    "The newly opened shift was not available before restart",
+  );
+
   const changed = await request(local.base, "PUT", "/settings/tax", localToken, {
     enabled: false,
     rate: 0,
@@ -195,6 +219,18 @@ try {
   check(restartedHealth.branchId === cloudBranchId, "Paired branch identity changed after restart");
   const persistentSession = await request(local.base, "GET", "/session", localToken);
   check(persistentSession.response.ok, "Generated JWT secret did not persist across restart");
+  const shiftAfterRestart = await request(
+    local.base,
+    "GET",
+    "/pos/context",
+    baristaLogin.data.token,
+  );
+  check(
+    shiftAfterRestart.response.ok &&
+      shiftAfterRestart.data.shift?.id === openedShift.data.id &&
+      shiftAfterRestart.data.shift.opening_cash === 12500,
+    "The open Barista shift did not survive application restart",
+  );
 
   let uploaded = false;
   for (let attempt = 0; attempt < 40; attempt += 1) {
@@ -221,6 +257,7 @@ try {
       queuedHistoryUploaded: true,
       oneTimePairingCode: true,
       persistentGeneratedJwtSecret: true,
+      openShiftSurvivedRestart: true,
       branchId: cloudBranchId,
     }),
   );

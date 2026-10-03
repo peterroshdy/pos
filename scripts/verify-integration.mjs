@@ -314,7 +314,11 @@ try {
     "Employee ledger entry did not persist",
   );
   const catalog = await get("/catalog", baristaToken);
-  const context = await get("/pos/context", baristaToken);
+  let context = await get("/pos/context", baristaToken);
+  if (!context.shift) {
+    await post("/shifts/open", baristaToken, { openingCash: 10000 });
+    context = await get("/pos/context", baristaToken);
+  }
   check(
     catalog.products.length >= 14 && context.shift?.id,
     "Seed catalog or shift is missing",
@@ -567,7 +571,12 @@ try {
     "Variant ingredient refund restoration is incorrect",
   );
   const outbox = await get("/sync/status", token);
-  check(outbox.pending >= 2, "Durable sync events were not queued");
+  check(
+    outbox.mode === "cloud"
+      ? outbox.pending === 0 && outbox.state === "synced"
+      : outbox.pending >= 2,
+    "Synchronization status did not match the server mode",
+  );
   const treasury = await get("/treasury", token);
   check(
     treasury.shifts.length >= 1 &&

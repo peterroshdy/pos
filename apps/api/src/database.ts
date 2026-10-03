@@ -1198,6 +1198,11 @@ function seed(db: SqliteDatabase) {
   // the broader administrative shifts.manage permission.
   permissionInsert.run(effectiveBaristaRoleId, "pos.history");
   permissionInsert.run(effectiveBaristaRoleId, "pos.shift");
+  // Administrative users supervise shifts; they do not own cash-register
+  // shifts unless they are deliberately assigned a separate POS role.
+  db.prepare(
+    "DELETE FROM role_permissions WHERE role_id=? AND permission='pos.shift'",
+  ).run(roleId);
 
   const existingOwner = db
     .prepare("SELECT id FROM users WHERE id = ?")
@@ -1338,18 +1343,25 @@ function seed(db: SqliteDatabase) {
     "UPDATE settings SET value = replace(replace(replace(value, 'Token Taste', 'Talk & TASTE'), 'Talk and TASTE', 'Talk & TASTE'), 'Test & Coffee', 'Talk & TASTE'), updated_at = ? WHERE key IN ('brand', 'receipt')",
   ).run(timestamp);
 
-  const seededOwner = db
-    .prepare("SELECT id FROM users WHERE id = ?")
-    .get(ownerId);
-  const openShift = db
-    .prepare("SELECT id FROM shifts WHERE branch_id = ? AND status = 'open'")
-    .get(branchId) as { id: string } | undefined;
-  if (seededOwner && !openShift) {
-    db.prepare(
-      `INSERT INTO shifts (id, branch_id, user_id, opened_at, opening_cash, status)
-      VALUES (?, ?, ?, ?, 0, 'open')`,
-    ).run(randomUUID(), branchId, ownerId, timestamp);
-  }
+  // Older builds created an owner shift automatically. Preserve any linked
+  // orders, but retire the open administrative shift with a balanced close so
+  // it cannot block the next operational employee shift.
+  db.prepare(
+    `UPDATE shifts
+     SET status='closed',
+         closed_at=COALESCE(closed_at, ?),
+         expected_cash=COALESCE(expected_cash, opening_cash + (
+           SELECT COALESCE(SUM(tm.amount),0) FROM treasury_movements tm
+           WHERE tm.shift_id=shifts.id AND tm.payment_method='cash' AND tm.type!='opening_cash'
+         )),
+         closing_cash=COALESCE(closing_cash, opening_cash + (
+           SELECT COALESCE(SUM(tm.amount),0) FROM treasury_movements tm
+           WHERE tm.shift_id=shifts.id AND tm.payment_method='cash' AND tm.type!='opening_cash'
+         )),
+         difference=COALESCE(difference,0),
+         close_note=CASE WHEN close_note='' THEN 'Administrative setup shift retired' ELSE close_note END
+     WHERE status='open' AND user_id IN (SELECT id FROM users WHERE is_super_admin=1)`,
+  ).run(timestamp);
 }
 
 export function insertAudit(

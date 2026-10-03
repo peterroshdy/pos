@@ -3,7 +3,9 @@ services:
     build:
       context: .
     container_name: talk-and-taste-branch
+    init: true
     restart: unless-stopped
+    stop_grace_period: 30s
     environment:
       NODE_ENV: production
       PORT: 4100
@@ -12,7 +14,7 @@ services:
       JWT_SECRET: ${JWT_SECRET:-}
       BOOTSTRAP_ADMIN_PASSWORD: ${BOOTSTRAP_ADMIN_PASSWORD:-}
       BOOTSTRAP_ADMIN_PIN: ${BOOTSTRAP_ADMIN_PIN:-}
-      CLOUD_ENROLLMENT_URL: ${CLOUD_ENROLLMENT_URL:-https://157.173.194.66}
+      CLOUD_ENROLLMENT_URL: ${CLOUD_ENROLLMENT_URL:-https://admin.talkandtaste.app}
       CASH_DRAWER_COMMAND_URL: ${CASH_DRAWER_COMMAND_URL:-}
       CASH_DRAWER_COMMAND_TOKEN: ${CASH_DRAWER_COMMAND_TOKEN:-}
     ports:

@@ -32,7 +32,7 @@ describe("branch database", () => {
     expect(granted.count).toBeGreaterThan(15);
     const adminPos = db
       .prepare(
-        "SELECT COUNT(*) AS count FROM role_permissions WHERE role_id='role-owner' AND permission IN ('pos.access','pos.drawer','pos.discount')",
+        "SELECT COUNT(*) AS count FROM role_permissions WHERE role_id='role-owner' AND permission IN ('pos.access','pos.drawer','pos.discount','pos.shift')",
       )
       .get() as { count: number };
     const baristaPermissions = db
@@ -44,6 +44,12 @@ describe("branch database", () => {
       .prepare("SELECT system_role FROM roles WHERE id='role-barista'")
       .get() as { system_role: number };
     expect(adminPos.count).toBe(0);
+    const adminShifts = db
+      .prepare(
+        "SELECT COUNT(*) AS count FROM shifts WHERE user_id='user-owner'",
+      )
+      .get() as { count: number };
+    expect(adminShifts.count).toBe(0);
     expect(baristaPermissions.map((row) => row.permission)).toEqual([
       "pos.access",
       "pos.drawer",

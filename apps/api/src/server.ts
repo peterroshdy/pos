@@ -42,6 +42,7 @@ const currentBusinessDate = () =>
     month: "2-digit",
     day: "2-digit",
   }).format(new Date());
+const startedAt = Date.now();
 const db = createDatabase(
   process.env.DATABASE_PATH ?? resolve(process.cwd(), "data/token-taste.db"),
 );
@@ -153,13 +154,17 @@ app.setErrorHandler((error: FastifyError, _request, reply) => {
   });
 });
 
-app.get("/api/health", async () => ({
-  status: "ok",
-  database: "connected",
-  mode: cloudServer ? "cloud" : "branch",
-  ...(cloudServer ? {} : { branchId: localBranchId }),
-  timestamp: new Date().toISOString(),
-}));
+app.get("/api/health", async () => {
+  db.prepare("SELECT 1").get();
+  return {
+    status: "ok",
+    database: "connected",
+    mode: cloudServer ? "cloud" : "branch",
+    uptimeSeconds: Math.floor((Date.now() - startedAt) / 1000),
+    ...(cloudServer ? {} : { branchId: localBranchId }),
+    timestamp: new Date().toISOString(),
+  };
+});
 
 const cloudBranchTokens = (() => {
   try {
@@ -638,21 +643,6 @@ app.post(
           entityType: "user",
           entityId: "user-owner",
         });
-        const openShift = db
-          .prepare(
-            "SELECT id FROM shifts WHERE branch_id = ? AND status = 'open'",
-          )
-          .get(localBranchId);
-        if (!openShift)
-          db.prepare(
-            `INSERT INTO shifts (id, branch_id, user_id, opened_at, opening_cash, status)
-            VALUES (?, ?, ?, ?, 0, 'open')`,
-          ).run(
-            randomUUID(),
-            localBranchId,
-            "user-owner",
-            timestamp,
-          );
       });
     } catch (error) {
       if (error instanceof Error && error.message.includes("already complete"))
@@ -2062,7 +2052,9 @@ app.get(
     const shift = db
       .prepare(
         `SELECT s.*, u.name AS user_name, u.name_ar AS user_name_ar FROM shifts s JOIN users u ON u.id = s.user_id
-    WHERE s.branch_id = ? AND s.status = 'open' ORDER BY s.opened_at DESC LIMIT 1`,
+    WHERE s.branch_id = ? AND s.status = 'open' AND u.is_super_admin=0
+      AND NOT EXISTS (SELECT 1 FROM role_permissions rp WHERE rp.role_id=u.role_id AND rp.permission='shifts.manage')
+    ORDER BY s.opened_at DESC LIMIT 1`,
       )
       .get(request.user.branchId);
     const customers = db
@@ -3300,7 +3292,10 @@ app.get(
     const activeShiftRows = db
       .prepare(
         `SELECT s.id,s.opened_at,u.name AS user_name,u.name_ar AS user_name_ar FROM shifts s
-         JOIN users u ON u.id=s.user_id WHERE s.branch_id=? AND s.status='open' ORDER BY s.opened_at`,
+         JOIN users u ON u.id=s.user_id
+         WHERE s.branch_id=? AND s.status='open' AND u.is_super_admin=0
+           AND NOT EXISTS (SELECT 1 FROM role_permissions rp WHERE rp.role_id=u.role_id AND rp.permission='shifts.manage')
+         ORDER BY s.opened_at`,
       )
       .all(request.user.branchId);
     const outstandingCredit = Number(
@@ -4837,7 +4832,9 @@ app.get(
     const shift = db
       .prepare(
         `SELECT s.*, u.name AS user_name, u.name_ar AS user_name_ar FROM shifts s JOIN users u ON u.id = s.user_id
-    WHERE s.branch_id = ? AND s.status = 'open' ORDER BY s.opened_at DESC LIMIT 1`,
+    WHERE s.branch_id = ? AND s.status = 'open' AND u.is_super_admin=0
+      AND NOT EXISTS (SELECT 1 FROM role_permissions rp WHERE rp.role_id=u.role_id AND rp.permission='shifts.manage')
+    ORDER BY s.opened_at DESC LIMIT 1`,
       )
       .get(request.user.branchId);
     const shifts = db
@@ -4856,7 +4853,8 @@ app.get(
     COALESCE((SELECT SUM(CASE WHEN tm.amount>0 AND tm.type IN ('owner_deposit','other_income') THEN tm.amount ELSE 0 END) FROM treasury_movements tm WHERE tm.shift_id=s.id AND tm.payment_method='cash'),0) AS cash_added,
     COALESCE((SELECT SUM(CASE WHEN tm.amount<0 AND tm.type NOT IN ('void','refund') THEN -tm.amount ELSE 0 END) FROM treasury_movements tm WHERE tm.shift_id=s.id AND tm.payment_method='cash'),0) AS cash_removed
     FROM shifts s JOIN users u ON u.id = s.user_id
-    LEFT JOIN orders o ON o.shift_id = s.id WHERE s.branch_id = ?
+    LEFT JOIN orders o ON o.shift_id = s.id WHERE s.branch_id = ? AND u.is_super_admin=0
+      AND NOT EXISTS (SELECT 1 FROM role_permissions rp WHERE rp.role_id=u.role_id AND rp.permission='shifts.manage')
     GROUP BY s.id ORDER BY s.opened_at DESC LIMIT 30`,
       )
       .all(request.user.branchId);
@@ -5091,13 +5089,23 @@ app.post(
 
 app.post(
   "/api/shifts/open",
-  { preHandler: requireAnyPermission("pos.shift", "shifts.manage") },
+  { preHandler: requirePermission("pos.shift") },
   async (request, reply) => {
+    if (
+      request.user.isSuperAdmin ||
+      !request.user.permissions.includes("pos.access") ||
+      request.user.permissions.includes("shifts.manage")
+    )
+      return reply.status(403).send({
+        error: "Only POS staff can open an operational shift",
+      });
     const body = request.body as { openingCash?: number };
     if (
       db
         .prepare(
-          "SELECT id FROM shifts WHERE branch_id = ? AND status = 'open'",
+          `SELECT s.id FROM shifts s JOIN users u ON u.id=s.user_id
+           WHERE s.branch_id=? AND s.status='open' AND u.is_super_admin=0
+             AND NOT EXISTS (SELECT 1 FROM role_permissions rp WHERE rp.role_id=u.role_id AND rp.permission='shifts.manage')`,
         )
         .get(request.user.branchId)
     )
@@ -5163,6 +5171,8 @@ app.get(
     const conditions = [
       `s.branch_id IN (${placeholders})`,
       "substr(s.opened_at,1,10) BETWEEN ? AND ?",
+      "u.is_super_admin=0",
+      "NOT EXISTS (SELECT 1 FROM role_permissions shift_manager WHERE shift_manager.role_id=u.role_id AND shift_manager.permission='shifts.manage')",
     ];
     const params: Array<string> = [...branchIds, from, to];
     if (query.userId) {
@@ -5197,7 +5207,8 @@ app.get(
       SELECT s.*,u.name AS user_name,u.name_ar AS user_name_ar,b.name AS branch_name,b.name_ar AS branch_name_ar
       FROM shifts s JOIN users u ON u.id=s.user_id JOIN branches b ON b.id=s.branch_id
       WHERE s.branch_id IN (${placeholders}) AND julianday(COALESCE(s.closed_at,CURRENT_TIMESTAMP))>=julianday('now','-24 hours')
-        AND julianday(s.opened_at)<=julianday('now')`).all(...branchIds) as unknown as Array<Record<string, unknown>>;
+        AND julianday(s.opened_at)<=julianday('now') AND u.is_super_admin=0
+        AND NOT EXISTS (SELECT 1 FROM role_permissions shift_manager WHERE shift_manager.role_id=u.role_id AND shift_manager.permission='shifts.manage')`).all(...branchIds) as unknown as Array<Record<string, unknown>>;
     const recentOrders = db.prepare(`
       SELECT o.user_id,o.status,o.payment_method,o.total,o.refunded_amount,o.discount_amount
       FROM orders o WHERE o.branch_id IN (${placeholders}) AND julianday(o.created_at)>=julianday('now','-24 hours')`).all(...branchIds) as unknown as Array<Record<string, unknown>>;
@@ -5249,7 +5260,7 @@ app.get(
       cashSales: total.cashSales + Number(shift.cash_sales ?? 0),
       variance: total.variance + Number(shift.difference ?? 0),
     }), { shifts: 0, open: 0, minutes: 0, orders: 0, netSales: 0, cashSales: 0, variance: 0 });
-    const users = db.prepare(`SELECT DISTINCT u.id,u.name,u.name_ar FROM users u JOIN shifts s ON s.user_id=u.id WHERE s.branch_id IN (${placeholders}) ORDER BY u.name`).all(...branchIds);
+    const users = db.prepare(`SELECT DISTINCT u.id,u.name,u.name_ar FROM users u JOIN shifts s ON s.user_id=u.id WHERE s.branch_id IN (${placeholders}) AND u.is_super_admin=0 AND NOT EXISTS (SELECT 1 FROM role_permissions shift_manager WHERE shift_manager.role_id=u.role_id AND shift_manager.permission='shifts.manage') ORDER BY u.name`).all(...branchIds);
     return { from, to, summary, shifts, rolling24: [...rollupMap.values()], filters: { branches: availableBranches, users } };
   },
 );
@@ -5411,7 +5422,7 @@ app.get(
       .get() as object;
     const shiftDifferences = db
       .prepare(
-        `SELECT s.id,u.name,s.opened_at,s.closed_at,s.expected_cash,s.closing_cash,s.difference FROM shifts s JOIN users u ON u.id=s.user_id WHERE s.branch_id IN (${placeholders}) AND s.status='closed' AND substr(s.closed_at,1,10) BETWEEN ? AND ? ORDER BY s.closed_at DESC LIMIT 50`,
+        `SELECT s.id,u.name,s.opened_at,s.closed_at,s.expected_cash,s.closing_cash,s.difference FROM shifts s JOIN users u ON u.id=s.user_id WHERE s.branch_id IN (${placeholders}) AND s.status='closed' AND u.is_super_admin=0 AND NOT EXISTS (SELECT 1 FROM role_permissions rp WHERE rp.role_id=u.role_id AND rp.permission='shifts.manage') AND substr(s.closed_at,1,10) BETWEEN ? AND ? ORDER BY s.closed_at DESC LIMIT 50`,
       )
       .all(...branchBounds);
     const branchComparison = db
@@ -5533,6 +5544,16 @@ app.put(
 );
 
 app.get("/api/sync/status", { preHandler: authenticate }, async (request) => {
+  if (cloudServer)
+    return {
+      mode: "cloud" as const,
+      state: "synced" as const,
+      pending: 0,
+      failed: 0,
+      cloudConfigured: true,
+      paired: true,
+      branchId: request.user.branchId,
+    };
   const pending = (
     db
       .prepare(
@@ -5548,6 +5569,7 @@ app.get("/api/sync/status", { preHandler: authenticate }, async (request) => {
       .get(request.user.branchId) as { count: number }
   ).count;
   return {
+    mode: "branch" as const,
     state: (process.env.CLOUD_SYNC_URL || getRuntimeValue(db, "cloud_url"))
       ? failed
         ? "error"
@@ -5577,6 +5599,18 @@ if (existsSync(webRoot)) {
 
 const port = Number(process.env.PORT ?? 4100);
 await app.listen({ port, host: "0.0.0.0" });
-startSyncWorker(db, app.log);
+const stopSyncWorker = startSyncWorker(db, app.log);
+
+let shuttingDown = false;
+const shutdown = async (signal: string) => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  app.log.info({ signal }, "Gracefully stopping Talk & TASTE");
+  stopSyncWorker();
+  await app.close();
+  db.close();
+};
+process.once("SIGTERM", () => void shutdown("SIGTERM"));
+process.once("SIGINT", () => void shutdown("SIGINT"));
 
 export { app, db };
