@@ -24,6 +24,7 @@ import {
   X,
 } from "lucide-react";
 import { formatMoney, type PaymentMethod } from "@token-taste/shared";
+import { QRCodeSVG } from "qrcode.react";
 import { api } from "../api";
 import { useAuth } from "../auth";
 import { useI18n } from "../i18n";
@@ -265,6 +266,7 @@ export function PosPage() {
   const total = Math.max(0, subtotal - discount);
   const itemCount = cart.reduce((sum, item) => sum + item.quantity, 0);
   const money = (value: number) => formatMoney(value, language);
+  const receiptMoney = (value: number) => formatMoney(value, "en");
 
   const add = (product: ProductRow, variant?: VariantRow) => {
     const lineId = `${product.id}:${variant?.id ?? "base"}`;
@@ -1166,78 +1168,89 @@ export function PosPage() {
             </div>
             <h2>Payment complete</h2>
             <p>Order #{receipt.orderNumber}</p>
-            <div className="receipt-paper">
+            <div className="receipt-paper receipt-paper--journal" dir="ltr" data-no-localize>
               <div className="receipt-brand">
+                <span className="receipt-journal-mark">T&amp;T</span>
                 <strong>{context?.brand.name ?? "Talk & TASTE"}</strong>
                 {context?.receipt.showBranch !== false && (
-                  <small>
-                    {language === "ar"
-                      ? context?.branch.name_ar
-                      : context?.branch.name}
-                  </small>
+                  <>
+                    <small>{context?.branch.name}</small>
+                    {context?.branch.address && <small>{context.branch.address}</small>}
+                  </>
                 )}
               </div>
-              <div>
-                <span>Order</span>
-                <strong>{receipt.orderNumber}</strong>
+              <hr />
+              <div className="receipt-journal-order">
+                <strong>ORDER #{receipt.orderNumber}</strong>
+                <span>SALE</span>
               </div>
               <div>
-                <span>{t("time")}</span>
+                <span>Date</span>
                 <strong>
-                  {new Date(receipt.createdAt).toLocaleString(
-                    language === "ar" ? "ar-EG" : "en-EG",
-                  )}
+                  {new Date(receipt.createdAt).toLocaleString("en-EG")}
                 </strong>
               </div>
               <div>
                 <span>Barista</span>
-                <strong>{language === "ar" ? receipt.userNameAr ?? context?.baristaAr : receipt.userName ?? context?.barista}</strong>
+                <strong>{receipt.userName ?? context?.barista}</strong>
               </div>
               <hr />
+              <div className="receipt-journal-labels">
+                <span>ITEM</span>
+                <span>AMOUNT</span>
+              </div>
               {receipt.items?.map((item, index) => (
                 <div className="receipt-line" key={index}>
                   <span>
                     {item.quantity} ×{" "}
-                    {language === "ar" ? item.nameAr : item.name}
-                    {(language === "ar" ? item.variantNameAr : item.variantName)
-                      ? ` · ${language === "ar" ? item.variantNameAr : item.variantName}`
-                      : ""}
+                    {item.name}
+                    {item.variantName ? ` · ${item.variantName}` : ""}
                   </span>
-                  <strong>{money(item.total)}</strong>
+                  <strong>{receiptMoney(item.total)}</strong>
                 </div>
               ))}
               <hr />
               <div>
-                <span>{t("payment")}</span>
+                <span>Subtotal</span>
+                <strong>{receiptMoney(receipt.subtotal)}</strong>
+              </div>
+              <div>
+                <span>Payment</span>
                 <strong className="capitalize">{receipt.paymentMethod}</strong>
               </div>
               {receipt.discountAmount > 0 && (
                 <div>
-                  <span>{t("discount")}</span>
-                  <strong>−{money(receipt.discountAmount)}</strong>
+                  <span>Discount</span>
+                  <strong>−{receiptMoney(receipt.discountAmount)}</strong>
                 </div>
               )}
               {receipt.taxAmount > 0 && (
                 <div>
-                  <span>{t("tax")}</span>
-                  <strong>{money(receipt.taxAmount)}</strong>
+                  <span>Tax</span>
+                  <strong>{receiptMoney(receipt.taxAmount)}</strong>
                 </div>
               )}
               <div className="receipt-total">
-                <span>{t("total")}</span>
-                <strong>{money(receipt.total)}</strong>
+                <span>TOTAL</span>
+                <strong>{receiptMoney(receipt.total)}</strong>
               </div>
               {receipt.customerBalance != null && (
                 <div>
                   <span>Customer balance</span>
-                  <strong>{money(receipt.customerBalance)}</strong>
+                  <strong>{receiptMoney(receipt.customerBalance)}</strong>
                 </div>
               )}
-              {context?.receipt.footer && (
-                <small className="receipt-footer">
-                  {context.receipt.footer}
-                </small>
-              )}
+              <footer className="receipt-footer receipt-journal-footer">
+                <strong>If you didn't like it, don't pay.</strong>
+                <QRCodeSVG
+                  value="https://talkandtaste.app"
+                  size={88}
+                  level="M"
+                  marginSize={2}
+                  title="Open the Talk & TASTE app"
+                />
+                <span>talkandtaste.app</span>
+              </footer>
             </div>
             <div className="receipt-actions">
               <button className="soft-button" onClick={() => window.print()}>

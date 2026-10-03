@@ -159,9 +159,6 @@ export function AppShell() {
   const title =
     navItems.find((item) => item.to === location.pathname)?.label ??
     "dashboard";
-  const displayTitle = location.pathname === "/receipt-designs"
-    ? "Receipt designs"
-    : t(title);
 
   return (
     <div className={`app-shell ${isPos ? "app-shell--pos" : ""} ${sidebarCollapsed ? "app-shell--collapsed" : ""}`}>
@@ -245,7 +242,7 @@ export function AppShell() {
               <Menu />
             </button>
             <div>
-              <h1>{displayTitle}</h1>
+              <h1>{t(title)}</h1>
               <p>
                 {language === "ar" ? user?.branchNameAr : user?.branchName}
               </p>

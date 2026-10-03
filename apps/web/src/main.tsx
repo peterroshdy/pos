@@ -21,7 +21,6 @@ const BranchesPage = lazy(() => import("./pages/BranchesPage").then((module) => 
 const AuditPage = lazy(() => import("./pages/AuditPage").then((module) => ({ default: module.AuditPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((module) => ({ default: module.SettingsPage })));
 const ShiftsPage = lazy(() => import("./pages/ShiftsPage").then((module) => ({ default: module.ShiftsPage })));
-const ReceiptDesignsPage = lazy(() => import("./pages/ReceiptDesignsPage").then((module) => ({ default: module.ReceiptDesignsPage })));
 
 function ProtectedRoutes() {
   const { user, loading, setupRequired, can } = useAuth();
@@ -44,7 +43,6 @@ function ProtectedRoutes() {
         <Route path="reports" element={<ReportsPage />} />
         <Route path="shifts" element={can("shifts.manage") ? <ShiftsPage /> : <Navigate to="/" replace />} />
         <Route path="settings" element={<SettingsPage />} />
-        <Route path="receipt-designs" element={can("settings.manage") ? <ReceiptDesignsPage /> : <Navigate to="/" replace />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes></Suspense>

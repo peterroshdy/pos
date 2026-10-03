@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
-import { Building2, Cloud, Eye, Link2, ReceiptText, Save, ShieldCheck } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Building2, Cloud, Link2, ReceiptText, Save, ShieldCheck } from "lucide-react";
 import { api } from "../api";
 import { useI18n } from "../i18n";
 
@@ -221,24 +220,11 @@ export function SettingsPage() {
                 </span>
                 <div>
                   <h3>Receipt & cash drawer</h3>
-                  <p>Thermal print behavior and bilingual receipt content.</p>
+                  <p>English thermal receipt and cash-drawer behavior.</p>
                 </div>
               </div>
             </header>
             <div className="settings-body">
-              <label className="field">
-                <span>Receipt footer / message</span>
-                <textarea
-                  rows={3}
-                  value={settings.receipt?.footer ?? ""}
-                  onChange={(e) =>
-                    setSettings({
-                      ...settings,
-                      receipt: { ...settings.receipt, footer: e.target.value },
-                    })
-                  }
-                />
-              </label>
               <div className="field-row">
                 <label className="switch-field">
                   <input
@@ -258,32 +244,10 @@ export function SettingsPage() {
                   <div>
                     <strong>Auto-print after checkout</strong>
                     <small>
-                      Opens the system print dialog after a successful sale.
+                      Prints silently on the dedicated Windows POS after a successful sale.
                     </small>
                   </div>
                 </label>
-                <label className="switch-field">
-                  <input
-                    type="checkbox"
-                    checked={settings.receipt?.bilingual ?? true}
-                    onChange={(e) =>
-                      setSettings({
-                        ...settings,
-                        receipt: {
-                          ...settings.receipt,
-                          bilingual: e.target.checked,
-                        },
-                      })
-                    }
-                  />
-                  <i />
-                  <div>
-                    <strong>Arabic & English capable</strong>
-                    <small>Uses the active POS language and RTL layout.</small>
-                  </div>
-                </label>
-              </div>
-              <div className="field-row">
                 <label className="switch-field">
                   <input
                     type="checkbox"
@@ -301,41 +265,36 @@ export function SettingsPage() {
                   <i />
                   <div>
                     <strong>Show branch</strong>
-                    <small>Include branch identity on each receipt.</small>
+                    <small>Include the English branch identity on each receipt.</small>
                   </div>
                 </label>
-                <label className="field">
-                  <span>Drawer trigger</span>
-                  <select
-                    value={settings.receipt?.drawerTrigger ?? "printer"}
-                    onChange={(e) =>
-                      setSettings({
-                        ...settings,
-                        receipt: {
-                          ...settings.receipt,
-                          drawerTrigger: e.target.value,
-                        },
-                      })
-                    }
-                  >
-                    <option value="printer">Via receipt printer</option>
-                    <option value="browser">Browser / local bridge</option>
-                    <option value="disabled">Disabled</option>
-                  </select>
-                </label>
               </div>
-              <div className="settings-actions">
-                <button
-                  className="primary-button"
-                  onClick={() => save("receipt")}
+              <label className="field">
+                <span>Drawer trigger</span>
+                <select
+                  value={settings.receipt?.drawerTrigger ?? "printer"}
+                  onChange={(e) =>
+                    setSettings({
+                      ...settings,
+                      receipt: {
+                        ...settings.receipt,
+                        drawerTrigger: e.target.value,
+                      },
+                    })
+                  }
                 >
-                  <Save />{" "}
-                  {saved === "receipt" ? "Saved" : "Save receipt settings"}
-                </button>
-                <Link className="soft-button" to="/receipt-designs" data-no-localize>
-                  <Eye /> Preview 10 English receipt designs
-                </Link>
-              </div>
+                  <option value="printer">Via receipt printer</option>
+                  <option value="browser">Browser / local bridge</option>
+                  <option value="disabled">Disabled</option>
+                </select>
+              </label>
+              <button
+                className="primary-button"
+                onClick={() => save("receipt")}
+              >
+                <Save />{" "}
+                {saved === "receipt" ? "Saved" : "Save receipt settings"}
+              </button>
             </div>
           </section>
           <section className="panel settings-card" id="sync">
