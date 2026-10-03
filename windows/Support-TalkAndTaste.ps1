@@ -7,6 +7,10 @@ $desktop = [Environment]::GetFolderPath("Desktop")
 $bundleDirectory = Join-Path $desktop "TalkAndTaste-Support-$stamp"
 $bundleZip = "$bundleDirectory.zip"
 $launcherLog = Join-Path $env:LOCALAPPDATA "TalkAndTaste\launcher.log"
+$nativeLauncherLog = Join-Path $env:LOCALAPPDATA "TalkAndTaste\native-launcher.log"
+$nativeInstallLog = Join-Path $env:LOCALAPPDATA "TalkAndTaste\native-install.log"
+$nativeApiOutputLog = Join-Path $env:LOCALAPPDATA "TalkAndTaste\native-api-output.log"
+$nativeApiErrorLog = Join-Path $env:LOCALAPPDATA "TalkAndTaste\native-api-error.log"
 $hardwareLog = Join-Path $env:LOCALAPPDATA "TalkAndTaste\hardware-bridge.log"
 New-Item -ItemType Directory -Force -Path $bundleDirectory | Out-Null
 
@@ -38,6 +42,20 @@ Save-Diagnostic "02-disk" {
     Get-CimInstance Win32_LogicalDisk -Filter "DriveType=3" |
         Select-Object DeviceID, VolumeName, Size, FreeSpace |
         Format-Table -AutoSize
+}
+Save-Diagnostic "02b-native-runtime" {
+    $node = Get-Command node.exe -ErrorAction SilentlyContinue
+    if ($node) {
+        "Node executable: $($node.Source)"
+        & $node.Source --version
+    } else {
+        "node.exe was not found in PATH."
+    }
+    "Native API processes:"
+    Get-CimInstance Win32_Process |
+        Where-Object { $_.Name -eq "node.exe" -and $_.CommandLine -match "apps[/\\]api[/\\]dist[/\\]server.js" } |
+        Select-Object ProcessId, Name, CommandLine |
+        Format-List
 }
 
 $docker = Get-Command docker.exe -ErrorAction SilentlyContinue
@@ -82,6 +100,18 @@ Save-Diagnostic "11-hardware-bridge" {
 
 if (Test-Path $launcherLog) {
     Copy-Item $launcherLog (Join-Path $bundleDirectory "12-launcher.log")
+}
+if (Test-Path $nativeLauncherLog) {
+    Copy-Item $nativeLauncherLog (Join-Path $bundleDirectory "12b-native-launcher.log")
+}
+if (Test-Path $nativeInstallLog) {
+    Copy-Item $nativeInstallLog (Join-Path $bundleDirectory "12c-native-install.log")
+}
+if (Test-Path $nativeApiOutputLog) {
+    Copy-Item $nativeApiOutputLog (Join-Path $bundleDirectory "12d-native-api-output.log")
+}
+if (Test-Path $nativeApiErrorLog) {
+    Copy-Item $nativeApiErrorLog (Join-Path $bundleDirectory "12e-native-api-error.log")
 }
 if (Test-Path $hardwareLog) {
     Copy-Item $hardwareLog (Join-Path $bundleDirectory "13-hardware-bridge.log")

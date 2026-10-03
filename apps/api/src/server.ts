@@ -5784,7 +5784,7 @@ if (existsSync(webRoot)) {
 }
 
 const port = Number(process.env.PORT ?? 4100);
-await app.listen({ port, host: "0.0.0.0" });
+await app.listen({ port, host: process.env.HOST ?? "0.0.0.0" });
 const stopSyncWorker = startSyncWorker(db, app.log);
 const stopShiftAutoCloser = startShiftAutoCloser(db, app.log);
 

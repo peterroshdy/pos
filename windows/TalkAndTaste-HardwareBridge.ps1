@@ -2,7 +2,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Token,
     [string]$PrinterName = "",
-    [int]$Port = 17891
+    [int]$Port = 17891,
+    [string]$BindAddress = "0.0.0.0"
 )
 
 $ErrorActionPreference = "Stop"
@@ -132,9 +133,10 @@ try {
     $ownsMutex = $mutex.WaitOne(0, $false)
     if (-not $ownsMutex) { exit 0 }
 
-    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, $Port)
+    $listenerAddress = [System.Net.IPAddress]::Parse($BindAddress)
+    $listener = [System.Net.Sockets.TcpListener]::new($listenerAddress, $Port)
     $listener.Start()
-    Write-BridgeLog "Hardware bridge listening on port $Port."
+    Write-BridgeLog "Hardware bridge listening on $BindAddress`:$Port."
 
     while ($true) {
         $client = $listener.AcceptTcpClient()
