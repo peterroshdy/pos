@@ -11,6 +11,7 @@ $nativeLauncherLog = Join-Path $env:LOCALAPPDATA "TalkAndTaste\native-launcher.l
 $nativeInstallLog = Join-Path $env:LOCALAPPDATA "TalkAndTaste\native-install.log"
 $nativeApiOutputLog = Join-Path $env:LOCALAPPDATA "TalkAndTaste\native-api-output.log"
 $nativeApiErrorLog = Join-Path $env:LOCALAPPDATA "TalkAndTaste\native-api-error.log"
+$nativeWatchdogLog = Join-Path $env:LOCALAPPDATA "TalkAndTaste\native-watchdog.log"
 $hardwareLog = Join-Path $env:LOCALAPPDATA "TalkAndTaste\hardware-bridge.log"
 New-Item -ItemType Directory -Force -Path $bundleDirectory | Out-Null
 
@@ -112,6 +113,9 @@ if (Test-Path $nativeApiOutputLog) {
 }
 if (Test-Path $nativeApiErrorLog) {
     Copy-Item $nativeApiErrorLog (Join-Path $bundleDirectory "12e-native-api-error.log")
+}
+if (Test-Path $nativeWatchdogLog) {
+    Copy-Item $nativeWatchdogLog (Join-Path $bundleDirectory "12f-native-watchdog.log")
 }
 if (Test-Path $hardwareLog) {
     Copy-Item $hardwareLog (Join-Path $bundleDirectory "13-hardware-bridge.log")

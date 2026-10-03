@@ -51,7 +51,7 @@ After `git clone`, no terminal typing is needed:
 3. Approve the Windows administrator prompt for Node.js if it appears.
 4. Wait for the success message and create the local `admin` and `Barista` passwords in the browser.
 
-The installer builds the application, stores the database under `%LOCALAPPDATA%\TalkAndTaste\data`, creates a desktop shortcut, registers automatic startup after Windows login, starts the printer/cash-drawer bridge, and opens Edge in POS app mode. The API and hardware bridge bind to the local machine only. Startup also keeps one local database backup per day under `%LOCALAPPDATA%\TalkAndTaste\backups` and retains the latest 14 backups. To install future versions without terminal typing, double-click **Update Talk & TASTE Native.cmd**.
+The installer builds the application, stores the database under `%LOCALAPPDATA%\TalkAndTaste\data`, creates a desktop shortcut, registers automatic startup after Windows login, starts the printer/cash-drawer bridge, and opens Edge in POS app mode. A hidden watchdog restarts the local API within five seconds if Node.js exits unexpectedly. The API and hardware bridge bind to the local machine only. Startup also keeps one local database backup per day under `%LOCALAPPDATA%\TalkAndTaste\backups` and retains the latest 14 backups. To install future versions without terminal typing, double-click **Update Talk & TASTE Native.cmd**.
 
 For the initial clone, run this once from Git CMD or Command Prompt:
 

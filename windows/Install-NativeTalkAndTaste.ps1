@@ -109,17 +109,19 @@ function Register-DesktopShortcut {
 }
 
 function Stop-NativeProcessesForUpdate {
-    $managedProcesses = @{
-        "native-api.pid" = "apps[/\\]api[/\\]dist[/\\]server\.js"
-        "hardware-bridge.pid" = "TalkAndTaste-HardwareBridge\.ps1"
-    }
-    foreach ($pidName in $managedProcesses.Keys) {
+    $managedProcesses = @(
+        @{ Pid = "native-watchdog.pid"; Pattern = "Watch-NativeTalkAndTaste\.ps1" },
+        @{ Pid = "native-api.pid"; Pattern = "apps[/\\]api[/\\]dist[/\\]server\.js" },
+        @{ Pid = "hardware-bridge.pid"; Pattern = "TalkAndTaste-HardwareBridge\.ps1" }
+    )
+    foreach ($managed in $managedProcesses) {
+        $pidName = $managed.Pid
         $pidFile = Join-Path $supportRoot $pidName
         if (-not (Test-Path $pidFile)) { continue }
         $processId = Get-Content $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1
         if ($processId) {
             $processDetails = Get-CimInstance Win32_Process -Filter "ProcessId=$processId" -ErrorAction SilentlyContinue
-            if ($processDetails -and $processDetails.CommandLine -match $managedProcesses[$pidName]) {
+            if ($processDetails -and $processDetails.CommandLine -match $managed.Pattern) {
                 $process = Get-Process -Id ([int]$processId) -ErrorAction SilentlyContinue
                 if ($process) {
                     Write-InstallLog "Stopping the previous native process $processId for the update."

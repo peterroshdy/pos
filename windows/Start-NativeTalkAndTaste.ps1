@@ -12,6 +12,7 @@ $launcherLog = Join-Path $supportRoot "native-launcher.log"
 $apiOutputLog = Join-Path $supportRoot "native-api-output.log"
 $apiErrorLog = Join-Path $supportRoot "native-api-error.log"
 $hardwareBridgeScript = Join-Path $PSScriptRoot "TalkAndTaste-HardwareBridge.ps1"
+$watchdogScript = Join-Path $PSScriptRoot "Watch-NativeTalkAndTaste.ps1"
 New-Item -ItemType Directory -Force -Path $supportRoot | Out-Null
 Set-Location $projectRoot
 
@@ -79,6 +80,26 @@ function Start-HardwareBridge {
     }
     $bridgeProcess = Start-Process -FilePath (Join-Path $PSHOME "powershell.exe") -ArgumentList $arguments -WindowStyle Hidden -PassThru
     Set-Content -Path $pidFile -Value $bridgeProcess.Id -Encoding ASCII
+}
+
+function Start-NativeWatchdog {
+    if (-not (Test-Path $watchdogScript)) {
+        throw "The native API watchdog file is missing."
+    }
+    $pidFile = Join-Path $supportRoot "native-watchdog.pid"
+    if (Test-Path $pidFile) {
+        $existingPid = Get-Content $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($existingPid) {
+            $existingProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$existingPid" -ErrorAction SilentlyContinue
+            if ($existingProcess -and $existingProcess.CommandLine -match "Watch-NativeTalkAndTaste\.ps1") {
+                return
+            }
+        }
+    }
+    $arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$watchdogScript`""
+    $watchdogProcess = Start-Process -FilePath (Join-Path $PSHOME "powershell.exe") -ArgumentList $arguments -WindowStyle Hidden -PassThru
+    Set-Content -Path $pidFile -Value $watchdogProcess.Id -Encoding ASCII
+    Write-LauncherLog "Native API watchdog started with process ID $($watchdogProcess.Id)."
 }
 
 function Find-EdgeCommand {
@@ -163,18 +184,9 @@ try {
     Start-HardwareBridge
     if (-not (Test-PosHealth)) {
         Backup-LocalDatabase
-        $processArguments = @{
-            FilePath = $nodeCommand
-            ArgumentList = @("apps/api/dist/server.js")
-            WorkingDirectory = $projectRoot
-            WindowStyle = "Hidden"
-            RedirectStandardOutput = $apiOutputLog
-            RedirectStandardError = $apiErrorLog
-            PassThru = $true
-        }
-        $process = Start-Process @processArguments
-        Set-Content -Path (Join-Path $supportRoot "native-api.pid") -Value $process.Id -Encoding ASCII
-        Write-LauncherLog "Native API started with process ID $($process.Id)."
+        Start-NativeWatchdog
+    } else {
+        Start-NativeWatchdog
     }
 
     $ready = $false
