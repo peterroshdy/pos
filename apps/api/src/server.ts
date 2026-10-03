@@ -31,6 +31,11 @@ import {
   setRuntimeValue,
 } from "./database.js";
 import { startSyncWorker } from "./sync-worker.js";
+import {
+  closeExpiredShifts,
+  startShiftAutoCloser,
+} from "./shift-lifecycle.js";
+import { dispatchCashDrawer } from "./hardware.js";
 
 const isProduction = process.env.NODE_ENV === "production";
 const cloudServer = process.env.CLOUD_RECEIVER_ENABLED === "true";
@@ -2049,14 +2054,48 @@ app.get(
   "/api/pos/context",
   { preHandler: requirePermission("pos.access") },
   async (request) => {
-    const shift = db
+    closeExpiredShifts(db);
+    const openShifts = db
       .prepare(
         `SELECT s.*, u.name AS user_name, u.name_ar AS user_name_ar FROM shifts s JOIN users u ON u.id = s.user_id
     WHERE s.branch_id = ? AND s.status = 'open' AND u.is_super_admin=0
       AND NOT EXISTS (SELECT 1 FROM role_permissions rp WHERE rp.role_id=u.role_id AND rp.permission='shifts.manage')
-    ORDER BY s.opened_at DESC LIMIT 1`,
+    ORDER BY s.opened_at`,
       )
-      .get(request.user.branchId);
+      .all(request.user.branchId) as unknown as Array<Record<string, unknown>>;
+    const shift =
+      openShifts.find((row) => String(row.user_id) === request.user.sub) ??
+      openShifts.at(-1) ??
+      null;
+    const staff = (
+      db
+        .prepare(
+          `SELECT id,role_id,name,name_ar,username FROM users
+           WHERE branch_id=? AND active=1 AND is_super_admin=0
+           ORDER BY name COLLATE NOCASE`,
+        )
+        .all(request.user.branchId) as unknown as Array<{
+        id: string;
+        role_id: string | null;
+        name: string;
+        name_ar: string;
+        username: string;
+      }>
+    )
+      .filter((user) => {
+        const access = userPermissions(user.id, user.role_id);
+        return (
+          access.includes("pos.access") &&
+          access.includes("pos.shift") &&
+          !access.includes("shifts.manage")
+        );
+      })
+      .map(({ id, name, name_ar, username }) => ({
+        id,
+        name,
+        name_ar,
+        username,
+      }));
     const customers = db
       .prepare(
         `SELECT id, name, phone, credit_approved, credit_limit, credit_balance
@@ -2085,6 +2124,8 @@ app.get(
       .get() as { value?: string } | undefined;
     return {
       shift,
+      openShifts,
+      staff,
       customers,
       heldOrders,
       branch,
@@ -2115,13 +2156,14 @@ app.post(
         .status(400)
         .send({ error: "A non-empty order and open shift are required" });
     }
-    if (
-      !db
-        .prepare(
-          "SELECT id FROM shifts WHERE id=? AND branch_id=? AND status='open'",
-        )
-        .get(body.shiftId, request.user.branchId)
-    ) {
+    const selectedShift = db
+      .prepare(
+        "SELECT id,user_id FROM shifts WHERE id=? AND branch_id=? AND status='open'",
+      )
+      .get(body.shiftId, request.user.branchId) as
+      | { id: string; user_id: string }
+      | undefined;
+    if (!selectedShift) {
       return reply
         .status(409)
         .send({ error: "This branch does not have the selected open shift" });
@@ -2190,7 +2232,7 @@ app.post(
       id,
       request.user.branchId,
       body.shiftId,
-      request.user.sub,
+      selectedShift.user_id,
       JSON.stringify(payload),
       subtotal,
       body.note ?? "",
@@ -2199,7 +2241,7 @@ app.post(
     );
     insertAudit(db, {
       branchId: request.user.branchId,
-      userId: request.user.sub,
+      userId: selectedShift.user_id,
       action: "order.held",
       entityType: "held_order",
       entityId: id,
@@ -2263,6 +2305,28 @@ app.post(
           throw Object.assign(new Error("An open shift is required"), {
             statusCode: 409,
           });
+        const operator = db
+          .prepare(
+            "SELECT id,role_id,name,name_ar,active FROM users WHERE id=? AND branch_id=?",
+          )
+          .get(String(shift.user_id), request.user.branchId) as
+          | {
+              id: string;
+              role_id: string | null;
+              name: string;
+              name_ar: string;
+              active: number;
+            }
+          | undefined;
+        const operatorAccess = operator
+          ? userPermissions(operator.id, operator.role_id)
+          : [];
+        if (!operator?.active || !operatorAccess.includes("pos.access"))
+          throw Object.assign(
+            new Error("The selected shift employee cannot operate the POS"),
+            { statusCode: 403 },
+          );
+        const operatorUserId = operator.id;
         const productLookup =
           db.prepare(`SELECT p.id, p.category_id, p.name, p.name_ar, p.price, p.cost, p.stock, p.track_stock, c.name AS category_name, c.name_ar AS category_name_ar FROM products p JOIN categories c ON c.id=p.category_id
         WHERE p.id = ? AND p.active = 1 AND NOT EXISTS (SELECT 1 FROM product_branch_availability pba WHERE pba.product_id=p.id AND pba.branch_id=? AND pba.available=0)`);
@@ -2322,7 +2386,7 @@ app.post(
         );
         if (
           input.discountAmount > 0 &&
-          !request.user.permissions.includes("pos.discount")
+          !operatorAccess.includes("pos.discount")
         ) {
           throw Object.assign(new Error("Discount permission is required"), {
             statusCode: 403,
@@ -2401,7 +2465,7 @@ app.post(
           orderNumber,
           request.user.branchId,
           input.shiftId,
-          request.user.sub,
+          operatorUserId,
           input.customerId ?? null,
           input.paymentMethod,
           subtotal,
@@ -2454,7 +2518,7 @@ app.post(
               before,
               after,
               orderId,
-              request.user.sub,
+              operatorUserId,
               timestamp,
             );
           } else if (item.product.track_stock) {
@@ -2470,7 +2534,7 @@ app.post(
               before,
               after,
               orderId,
-              request.user.sub,
+              operatorUserId,
               timestamp,
             );
           }
@@ -2516,7 +2580,7 @@ app.post(
               ingredientAfter,
               orderId,
               `${String(item.product.name)}${item.variant ? ` · ${String(item.variant.name)}` : ""}`,
-              request.user.sub,
+              operatorUserId,
               timestamp,
             );
           }
@@ -2538,7 +2602,7 @@ app.post(
           input.paymentMethod,
           orderId,
           orderNumber,
-          request.user.sub,
+          operatorUserId,
           timestamp,
         );
         const customerBalance = input.customerId
@@ -2560,8 +2624,9 @@ app.post(
           orderNumber,
           businessDate: date,
           branchId: request.user.branchId,
-          userId: request.user.sub,
-          userName: request.user.name,
+          userId: operatorUserId,
+          userName: operator.name,
+          userNameAr: operator.name_ar,
           status: "completed",
           subtotal,
           discountAmount: input.discountAmount,
@@ -2590,7 +2655,7 @@ app.post(
         };
         insertAudit(db, {
           branchId: request.user.branchId,
-          userId: request.user.sub,
+          userId: operatorUserId,
           action: "order.completed",
           entityType: "order",
           entityId: orderId,
@@ -2601,7 +2666,7 @@ app.post(
         for (const activity of input.activityLog) {
           insertAudit(db, {
             branchId: request.user.branchId,
-            userId: request.user.sub,
+            userId: operatorUserId,
             action: activity.action,
             entityType: "order",
             entityId: orderId,
@@ -2626,7 +2691,7 @@ app.post(
             );
             insertAudit(db, {
               branchId: request.user.branchId,
-              userId: request.user.sub,
+              userId: operatorUserId,
               action: "order.resumed",
               entityType: "order",
               entityId: orderId,
@@ -3120,58 +3185,42 @@ app.post(
   async (request, reply) => {
     const body = request.body as { orderId?: string; shiftId?: string; reason?: string };
     const validOrder = body.orderId && db.prepare(
-      "SELECT id FROM orders WHERE id=? AND branch_id=? AND user_id=? AND payment_method='cash'",
-    ).get(body.orderId, request.user.branchId, request.user.sub);
+      "SELECT id FROM orders WHERE id=? AND branch_id=? AND payment_method='cash'",
+    ).get(body.orderId, request.user.branchId);
     const validShift = body.shiftId && db.prepare(
-      "SELECT id FROM shifts WHERE id=? AND branch_id=? AND user_id=? AND status='open'",
-    ).get(body.shiftId, request.user.branchId, request.user.sub);
+      "SELECT id FROM shifts WHERE id=? AND branch_id=? AND status='open'",
+    ).get(body.shiftId, request.user.branchId);
     if (!validOrder && !validShift)
       return reply.status(403).send({
         error: "The cash drawer requires your current cash transaction or open shift",
       });
-    const commandUrl = process.env.CASH_DRAWER_COMMAND_URL;
-    let dispatched = false;
-    let hardwareError: string | null = null;
-    if (commandUrl) {
-      try {
-        const response = await fetch(commandUrl, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            ...(process.env.CASH_DRAWER_COMMAND_TOKEN
-              ? {
-                  authorization: `Bearer ${process.env.CASH_DRAWER_COMMAND_TOKEN}`,
-                }
-              : {}),
-          },
-          body: JSON.stringify({ command: "open-drawer", branchId: request.user.branchId }),
-          signal: AbortSignal.timeout(3_000),
-        });
-        if (!response.ok)
-          throw new Error(`Hardware bridge returned ${response.status}`);
-        dispatched = true;
-      } catch (error) {
-        hardwareError =
-          error instanceof Error
-            ? error.message.slice(0, 200)
-            : "Hardware bridge failed";
-      }
-    }
+    const { dispatched, hardwareError } = await dispatchCashDrawer({
+      commandUrl: process.env.CASH_DRAWER_COMMAND_URL,
+      commandToken: process.env.CASH_DRAWER_COMMAND_TOKEN,
+      branchId: request.user.branchId,
+    });
     insertAudit(db, {
       branchId: request.user.branchId,
       userId: request.user.sub,
-      action: "cash_drawer.opened",
+      action: dispatched ? "cash_drawer.opened" : "cash_drawer.failed",
       entityType: validOrder ? "order" : "shift",
       entityId: String(validOrder ? body.orderId : body.shiftId),
       orderNumber: body.orderId ?? null,
       reason: body.reason ?? "Cash transaction",
       metadata: { dispatched, hardwareError },
     });
+    if (!dispatched)
+      return reply.status(503).send({
+        error: hardwareError ?? "The cash drawer could not be opened",
+        success: false,
+        command: "drawer-pulse-failed",
+        dispatched: false,
+      });
     return {
       success: true,
-      command: dispatched ? "drawer-pulse-dispatched" : "drawer-pulse-recorded",
-      dispatched,
-      hardwareError,
+      command: "drawer-pulse-dispatched",
+      dispatched: true,
+      hardwareError: null,
     };
   },
 );
@@ -5027,11 +5076,6 @@ app.post(
   async (request, reply) => {
     const id = (request.params as { id: string }).id;
     const body = request.body as { closingCash?: number; note?: string };
-    const closingCash = Number(body.closingCash);
-    if (!Number.isInteger(closingCash) || closingCash < 0)
-      return reply
-        .status(400)
-        .send({ error: "A valid closing cash count is required" });
     const shift = db
       .prepare(
         "SELECT * FROM shifts WHERE id = ? AND branch_id = ? AND status = 'open'",
@@ -5039,6 +5083,12 @@ app.post(
       .get(id, request.user.branchId) as Record<string, unknown> | undefined;
     if (!shift)
       return reply.status(404).send({ error: "Open shift not found" });
+    const sharedDrawer = Boolean(shift.shared_drawer);
+    const closingCash = Number(body.closingCash);
+    if (!sharedDrawer && (!Number.isInteger(closingCash) || closingCash < 0))
+      return reply
+        .status(400)
+        .send({ error: "A valid closing cash count is required" });
     const cashSales = (
       db
         .prepare(
@@ -5048,27 +5098,43 @@ app.post(
         .get(id) as { amount: number }
     ).amount;
     const expected = Number(shift.opening_cash) + cashSales;
-    const difference = closingCash - expected;
+    const recordedClosingCash = sharedDrawer ? null : closingCash;
+    const difference = sharedDrawer ? null : closingCash - expected;
     const timestamp = new Date().toISOString();
     db.prepare(
       `UPDATE shifts SET status = 'closed', closed_at = ?, closing_cash = ?, expected_cash = ?, difference = ?, close_note = ? WHERE id = ?`,
-    ).run(timestamp, closingCash, expected, difference, body.note ?? "", id);
+    ).run(
+      timestamp,
+      recordedClosingCash,
+      expected,
+      difference,
+      body.note ?? (sharedDrawer ? "Shared-device attendance shift" : ""),
+      id,
+    );
     insertAudit(db, {
       branchId: request.user.branchId,
-      userId: request.user.sub,
+      userId: String(shift.user_id),
       action: "shift.closed",
       entityType: "shift",
       entityId: id,
       originalValue: { status: "open" },
-      newValue: { status: "closed", closingCash, expected, difference },
+      newValue: {
+        status: "closed",
+        closingCash: recordedClosingCash,
+        expected,
+        difference,
+        sharedDrawer,
+      },
       reason: body.note ?? null,
+      metadata: { closedBySessionUserId: request.user.sub },
     });
     enqueueSync(db, request.user.branchId, "shift", id, "shift.closed", {
       id,
-      closingCash,
+      closingCash: recordedClosingCash,
       expected,
       difference,
       timestamp,
+      sharedDrawer,
     });
     const breakdown = db
       .prepare(
@@ -5091,6 +5157,7 @@ app.post(
   "/api/shifts/open",
   { preHandler: requirePermission("pos.shift") },
   async (request, reply) => {
+    closeExpiredShifts(db);
     if (
       request.user.isSuperAdmin ||
       !request.user.permissions.includes("pos.access") ||
@@ -5100,47 +5167,166 @@ app.post(
         error: "Only POS staff can open an operational shift",
       });
     const body = request.body as { openingCash?: number };
-    if (
-      db
-        .prepare(
-          `SELECT s.id FROM shifts s JOIN users u ON u.id=s.user_id
-           WHERE s.branch_id=? AND s.status='open' AND u.is_super_admin=0
-             AND NOT EXISTS (SELECT 1 FROM role_permissions rp WHERE rp.role_id=u.role_id AND rp.permission='shifts.manage')`,
-        )
-        .get(request.user.branchId)
-    )
+    if (db.prepare(
+      "SELECT id FROM shifts WHERE branch_id=? AND user_id=? AND status='open'",
+    ).get(request.user.branchId, request.user.sub))
       return reply
         .status(409)
-        .send({ error: "This branch already has an open shift" });
+        .send({ error: "This employee already has an open shift" });
     const openingCash = Number(body.openingCash ?? 0);
     if (!Number.isInteger(openingCash) || openingCash < 0)
       return reply.status(400).send({ error: "Invalid opening cash" });
     const id = randomUUID();
     const timestamp = new Date().toISOString();
-    db.prepare(
-      `INSERT INTO shifts (id, branch_id, user_id, opened_at, opening_cash, status)
-    VALUES (?, ?, ?, ?, ?, 'open')`,
-    ).run(
-      id,
-      request.user.branchId,
-      request.user.sub,
-      timestamp,
-      openingCash,
+    const overlapping = Boolean(
+      db
+        .prepare("SELECT id FROM shifts WHERE branch_id=? AND status='open'")
+        .get(request.user.branchId),
     );
+    inTransaction(db, () => {
+      if (overlapping)
+        db.prepare(
+          "UPDATE shifts SET shared_drawer=1 WHERE branch_id=? AND status='open'",
+        ).run(request.user.branchId);
+      db.prepare(
+        `INSERT INTO shifts (id, branch_id, user_id, opened_at, opening_cash, shared_drawer, status)
+         VALUES (?, ?, ?, ?, ?, ?, 'open')`,
+      ).run(
+        id,
+        request.user.branchId,
+        request.user.sub,
+        timestamp,
+        overlapping ? 0 : openingCash,
+        Number(overlapping),
+      );
+    });
     insertAudit(db, {
       branchId: request.user.branchId,
       userId: request.user.sub,
       action: "shift.opened",
       entityType: "shift",
       entityId: id,
-      newValue: { openingCash },
+      newValue: {
+        openingCash: overlapping ? 0 : openingCash,
+        sharedDrawer: overlapping,
+      },
     });
     enqueueSync(db, request.user.branchId, "shift", id, "shift.opened", {
       id,
-      openingCash,
+      openingCash: overlapping ? 0 : openingCash,
       timestamp,
+      sharedDrawer: overlapping,
     });
     return reply.status(201).send({ id, openedAt: timestamp });
+  },
+);
+
+app.post(
+  "/api/shifts/join",
+  {
+    preHandler: requirePermission("pos.access"),
+    config: { rateLimit: { max: 10, timeWindow: "1 minute" } },
+  },
+  async (request, reply) => {
+    if (cloudServer)
+      return reply
+        .status(403)
+        .send({ error: "Shared POS sign-in is available on the branch device" });
+    const body = request.body as { userId?: string; password?: string };
+    if (!body.userId || !body.password)
+      return reply
+        .status(400)
+        .send({ error: "Employee and password are required" });
+    const user = db
+      .prepare(
+        `SELECT id,branch_id,role_id,name,name_ar,password_hash,is_super_admin,active
+         FROM users WHERE id=? AND branch_id=?`,
+      )
+      .get(body.userId, request.user.branchId) as
+      | Record<string, unknown>
+      | undefined;
+    if (
+      !user?.active ||
+      user.is_super_admin ||
+      !bcrypt.compareSync(body.password, String(user.password_hash))
+    )
+      return reply.status(401).send({ error: "Invalid employee or password" });
+    const access = userPermissions(
+      String(user.id),
+      user.role_id ? String(user.role_id) : null,
+    );
+    if (
+      !access.includes("pos.access") ||
+      !access.includes("pos.shift") ||
+      access.includes("shifts.manage")
+    )
+      return reply
+        .status(403)
+        .send({ error: "Only POS staff can join the shared device" });
+
+    closeExpiredShifts(db);
+    const existing = db
+      .prepare(
+        "SELECT * FROM shifts WHERE branch_id=? AND user_id=? AND status='open'",
+      )
+      .get(request.user.branchId, String(user.id)) as
+      | Record<string, unknown>
+      | undefined;
+    if (existing)
+      return {
+        shift: {
+          ...existing,
+          user_name: user.name,
+          user_name_ar: user.name_ar,
+        },
+        alreadyOpen: true,
+      };
+
+    const id = randomUUID();
+    const timestamp = new Date().toISOString();
+    inTransaction(db, () => {
+      db.prepare(
+        "UPDATE shifts SET shared_drawer=1 WHERE branch_id=? AND status='open'",
+      ).run(request.user.branchId);
+      db.prepare(
+        `INSERT INTO shifts
+         (id,branch_id,user_id,opened_at,opening_cash,shared_drawer,status)
+         VALUES (?,?,?,?,0,1,'open')`,
+      ).run(id, request.user.branchId, String(user.id), timestamp);
+      insertAudit(db, {
+        branchId: request.user.branchId,
+        userId: String(user.id),
+        action: "shift.opened",
+        entityType: "shift",
+        entityId: id,
+        newValue: { openingCash: 0, sharedDrawer: true },
+        metadata: {
+          sharedDevice: true,
+          joinedThroughSessionUserId: request.user.sub,
+        },
+      });
+      enqueueSync(db, request.user.branchId, "shift", id, "shift.opened", {
+        id,
+        userId: String(user.id),
+        openingCash: 0,
+        timestamp,
+        sharedDrawer: true,
+      });
+    });
+    return reply.status(201).send({
+      shift: {
+        id,
+        branch_id: request.user.branchId,
+        user_id: user.id,
+        user_name: user.name,
+        user_name_ar: user.name_ar,
+        opened_at: timestamp,
+        opening_cash: 0,
+        shared_drawer: 1,
+        status: "open",
+      },
+      alreadyOpen: false,
+    });
   },
 );
 
@@ -5600,6 +5786,7 @@ if (existsSync(webRoot)) {
 const port = Number(process.env.PORT ?? 4100);
 await app.listen({ port, host: "0.0.0.0" });
 const stopSyncWorker = startSyncWorker(db, app.log);
+const stopShiftAutoCloser = startShiftAutoCloser(db, app.log);
 
 let shuttingDown = false;
 const shutdown = async (signal: string) => {
@@ -5607,6 +5794,7 @@ const shutdown = async (signal: string) => {
   shuttingDown = true;
   app.log.info({ signal }, "Gracefully stopping Talk & TASTE");
   stopSyncWorker();
+  stopShiftAutoCloser();
   await app.close();
   db.close();
 };

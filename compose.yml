@@ -19,6 +19,8 @@ services:
       CASH_DRAWER_COMMAND_TOKEN: ${CASH_DRAWER_COMMAND_TOKEN:-}
     ports:
       - "${APP_PORT:-8080}:4100"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - token_taste_data:/data
     healthcheck:

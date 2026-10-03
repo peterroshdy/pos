@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { Building2, Cloud, Link2, ReceiptText, Save, ShieldCheck } from "lucide-react";
+import { Building2, Cloud, Eye, Link2, ReceiptText, Save, ShieldCheck } from "lucide-react";
+import { Link } from "react-router-dom";
 import { api } from "../api";
 import { useI18n } from "../i18n";
 
@@ -323,13 +324,18 @@ export function SettingsPage() {
                   </select>
                 </label>
               </div>
-              <button
-                className="primary-button"
-                onClick={() => save("receipt")}
-              >
-                <Save />{" "}
-                {saved === "receipt" ? "Saved" : "Save receipt settings"}
-              </button>
+              <div className="settings-actions">
+                <button
+                  className="primary-button"
+                  onClick={() => save("receipt")}
+                >
+                  <Save />{" "}
+                  {saved === "receipt" ? "Saved" : "Save receipt settings"}
+                </button>
+                <Link className="soft-button" to="/receipt-designs" data-no-localize>
+                  <Eye /> Preview 10 English receipt designs
+                </Link>
+              </div>
             </div>
           </section>
           <section className="panel settings-card" id="sync">

@@ -164,6 +164,116 @@ try {
         24 * 60 * 60 * 1000,
     "The newly opened shift was not available before restart",
   );
+  const staffRoster = await request(local.base, "GET", "/staff", localToken);
+  const baristaRole = staffRoster.data.roles.find(
+    (role) => role.id === "role-barista",
+  );
+  const secondPassword = "SecondBaristaOnly#2026";
+  const secondBarista = await request(local.base, "POST", "/staff", localToken, {
+    name: "Second Barista",
+    nameAr: "باريستا ثانٍ",
+    username: "second-barista",
+    password: secondPassword,
+    roleId: baristaRole.id,
+  });
+  check(secondBarista.response.status === 201, "Second Barista setup failed");
+  const rejectedJoin = await request(
+    local.base,
+    "POST",
+    "/shifts/join",
+    baristaLogin.data.token,
+    { userId: secondBarista.data.id, password: "incorrect-password" },
+  );
+  check(
+    rejectedJoin.response.status === 401,
+    "Shared POS accepted invalid employee credentials",
+  );
+  const joined = await request(
+    local.base,
+    "POST",
+    "/shifts/join",
+    baristaLogin.data.token,
+    { userId: secondBarista.data.id, password: secondPassword },
+  );
+  check(joined.response.status === 201, "Second Barista could not join the shared POS");
+  const rejoined = await request(
+    local.base,
+    "POST",
+    "/shifts/join",
+    baristaLogin.data.token,
+    { userId: secondBarista.data.id, password: secondPassword },
+  );
+  check(
+    rejoined.response.ok &&
+      rejoined.data.alreadyOpen &&
+      rejoined.data.shift.id === joined.data.shift.id,
+    "Repeated shared-device sign-in created a duplicate employee shift",
+  );
+  const overlapping = await request(
+    local.base,
+    "GET",
+    "/pos/context",
+    baristaLogin.data.token,
+  );
+  check(
+    overlapping.data.openShifts.length === 2 &&
+      overlapping.data.openShifts.every((shift) => shift.shared_drawer === 1),
+    "Overlapping employee shifts were not kept open on the shared device",
+  );
+  const sharedCatalog = await request(
+    local.base,
+    "GET",
+    "/catalog",
+    baristaLogin.data.token,
+  );
+  const sharedProduct = sharedCatalog.data.products[0];
+  const sharedSale = await request(
+    local.base,
+    "POST",
+    "/orders/checkout",
+    baristaLogin.data.token,
+    {
+      clientRequestId: crypto.randomUUID(),
+      shiftId: joined.data.shift.id,
+      paymentMethod: "card",
+      discountAmount: 0,
+      note: "Shared POS operator verification",
+      activityLog: [],
+      items: [
+        {
+          productId: sharedProduct.id,
+          quantity: 1,
+          unitPrice: sharedProduct.price,
+          note: "",
+        },
+      ],
+    },
+  );
+  check(
+    sharedSale.response.status === 201 &&
+      sharedSale.data.order.userId === secondBarista.data.id,
+    "Shared POS order was not attributed to the selected employee",
+  );
+  const firstClosed = await request(
+    local.base,
+    "POST",
+    `/shifts/${openedShift.data.id}/close`,
+    baristaLogin.data.token,
+    {},
+  );
+  const afterFirstClosed = await request(
+    local.base,
+    "GET",
+    "/pos/context",
+    baristaLogin.data.token,
+  );
+  check(
+    firstClosed.response.ok &&
+      firstClosed.data.difference === null &&
+      afterFirstClosed.data.openShifts.length === 1 &&
+      afterFirstClosed.data.shift.id === joined.data.shift.id,
+    "Closing the first overlapping shift interrupted the second employee",
+  );
 
   const changed = await request(local.base, "PUT", "/settings/tax", localToken, {
     enabled: false,
@@ -227,9 +337,9 @@ try {
   );
   check(
     shiftAfterRestart.response.ok &&
-      shiftAfterRestart.data.shift?.id === openedShift.data.id &&
-      shiftAfterRestart.data.shift.opening_cash === 12500,
-    "The open Barista shift did not survive application restart",
+      shiftAfterRestart.data.shift?.id === joined.data.shift.id &&
+      shiftAfterRestart.data.shift.user_id === secondBarista.data.id,
+    "The remaining overlapping shift did not survive application restart",
   );
 
   let uploaded = false;
@@ -258,6 +368,8 @@ try {
       oneTimePairingCode: true,
       persistentGeneratedJwtSecret: true,
       openShiftSurvivedRestart: true,
+      overlappingSharedDeviceShifts: true,
+      selectedOperatorAttribution: true,
       branchId: cloudBranchId,
     }),
   );

@@ -27,12 +27,31 @@ The current testing branch is **City Stars Branch**.
 
 ## Windows branch setup
 
-1. Install Docker Desktop once.
-2. Extract the Talk & TASTE folder.
+### Windows prerequisites
+
+- A supported 64-bit Windows 11 installation (23H2 or newer is recommended for branch machines).
+- CPU virtualization enabled in BIOS/UEFI and WSL 2 enabled. Docker currently requires WSL 2.1.5 or newer and 8 GB system RAM for its WSL backend.
+- Docker Desktop configured to use Linux containers. This is the only separate application runtime required; Node.js, npm, Git, Python, and SQLite do not need to be installed on the POS machine.
+- Microsoft Edge for the dedicated app window and silent receipt printing. The POS still opens in the default browser if Edge is unavailable, but silent printing is then unavailable.
+- The Windows driver and printer queue for the XP-Q808K when receipt printing or the connected cash drawer is required.
+- Internet access for the initial Docker image build and optional cloud pairing. Checkout continues locally when the internet is unavailable after installation.
+
+PowerShell is already included with supported Windows versions and is used by the launcher and hardware bridge.
+
+### Install
+
+1. Install and start Docker Desktop once.
+2. Extract the Talk & TASTE folder to a permanent location.
 3. Double-click `windows\Start Talk & TASTE.cmd`.
-4. On first launch, choose the `admin` password and the `Barista` password.
+4. On first launch, create the device-local `admin` password and the initial `Barista` password.
+
+Every fresh installation requires first-run account setup. It creates a local Super Admin with username `admin` and a local POS employee with username `Barista`; there is no shared or hard-coded production password. Passwords are hashed in the local database and both accounts work offline. The setup cannot be run again after the local administrator exists, and the accounts persist in the `token_taste_data` Docker volume across application and Windows restarts.
 
 No `.env`, branch ID, device ID, JWT secret, or terminal command is required. The launcher starts Docker Desktop when necessary, builds the app, waits until it is healthy, opens `http://localhost:8080`, and installs a per-user Windows startup shortcut automatically.
+
+The same launcher starts the bundled Windows hardware bridge, automatically creates its private authentication token, finds the installed XP-Q808K queue, makes it the dedicated POS browser's default printer, and opens Microsoft Edge in app mode with silent printing enabled. A completed or reprinted receipt therefore prints through the normal Windows driver without a browser print dialog. `RECEIPT_PRINTER_NAME` may be placed in the automatically managed `.env` only when Windows has more than one matching Xprinter queue and an explicit queue is required.
+
+The cash drawer plugs into the XP-Q808K's `DK`/drawer port. Manual drawer opening and cash checkout send the five-byte ESC/POS drawer pulse directly to the printer queue; they do not render a document, feed paper, cut paper, or print a blank receipt. The local API reports failure when the Windows bridge or printer is unavailable, and records successful and failed attempts separately in the audit log.
 
 After a Windows restart and user login, that shortcut starts Docker Desktop, starts the existing POS container without rebuilding it, waits for the local health check, and opens `http://localhost:8080` automatically. Docker's `unless-stopped` policy also restarts the application process after a crash. The named `token_taste_data` Docker volume is not recreated, so users, the generated JWT secret, the paired branch identity, orders, held orders, the sync queue, and an open shift survive both application and Windows restarts. A Barista can sign in again and continue the same open shift; shifts are closed only through the counted-cash closing flow.
 
@@ -59,6 +78,8 @@ The support tool creates a timestamped ZIP on the Windows Desktop containing:
 - local health-check output
 - cloud reachability status
 - launcher logs
+- installed Windows printer queues and default-printer status
+- hardware-bridge health and hardware-bridge logs
 
 The bundle deliberately excludes the SQLite database, passwords, tokens, and container environment. Send that ZIP to support. Do not run `docker compose down -v`, delete the `token_taste_data` volume, reset Docker Desktop, or uninstall Docker while unsynchronized local data exists.
 

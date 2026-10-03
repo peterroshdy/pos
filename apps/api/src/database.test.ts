@@ -6,6 +6,7 @@ import {
   type SqliteDatabase,
 } from "./database.js";
 import { applyInboxEvent } from "./sync-worker.js";
+import { closeExpiredShifts } from "./shift-lifecycle.js";
 
 describe("branch database", () => {
   let db: SqliteDatabase;
@@ -119,6 +120,45 @@ describe("branch database", () => {
         ),
       ),
     ).toBe(true);
+  });
+
+  it("automatically closes shifts at the 24-hour limit", () => {
+    const user = db
+      .prepare("SELECT id,branch_id FROM users WHERE username='Barista'")
+      .get() as { id: string; branch_id: string };
+    const now = new Date("2026-10-03T12:00:00.000Z");
+    const openedAt = new Date(now.getTime() - 25 * 60 * 60 * 1000);
+    const expectedClosedAt = new Date(
+      openedAt.getTime() + 24 * 60 * 60 * 1000,
+    ).toISOString();
+    db.prepare(
+      `INSERT INTO shifts
+       (id,branch_id,user_id,opened_at,opening_cash,status)
+       VALUES ('expired-shift',?,?,?,?, 'open')`,
+    ).run(user.branch_id, user.id, openedAt.toISOString(), 12500);
+
+    expect(closeExpiredShifts(db, now)).toEqual(["expired-shift"]);
+    const closed = db
+      .prepare(
+        "SELECT status,closed_at,expected_cash,closing_cash,difference,close_note FROM shifts WHERE id='expired-shift'",
+      )
+      .get() as Record<string, unknown>;
+    expect(closed).toMatchObject({
+      status: "closed",
+      closed_at: expectedClosedAt,
+      expected_cash: 12500,
+      closing_cash: null,
+      difference: null,
+      close_note: "Automatically closed after 24 hours",
+    });
+    const event = db
+      .prepare(
+        "SELECT event_type,payload FROM sync_outbox WHERE aggregate_id='expired-shift'",
+      )
+      .get() as { event_type: string; payload: string };
+    expect(event.event_type).toBe("shift.closed");
+    expect(JSON.parse(event.payload)).toMatchObject({ automatic: true });
+    expect(closeExpiredShifts(db, now)).toEqual([]);
   });
 
   it("receives cloud inventory transfers exactly once", () => {

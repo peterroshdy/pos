@@ -7,6 +7,7 @@ $desktop = [Environment]::GetFolderPath("Desktop")
 $bundleDirectory = Join-Path $desktop "TalkAndTaste-Support-$stamp"
 $bundleZip = "$bundleDirectory.zip"
 $launcherLog = Join-Path $env:LOCALAPPDATA "TalkAndTaste\launcher.log"
+$hardwareLog = Join-Path $env:LOCALAPPDATA "TalkAndTaste\hardware-bridge.log"
 New-Item -ItemType Directory -Force -Path $bundleDirectory | Out-Null
 
 function Save-Diagnostic {
@@ -65,8 +66,25 @@ Save-Diagnostic "09-cloud-reachability" {
     "HTTP status: $($response.StatusCode)"
 }
 
+Save-Diagnostic "10-printers" {
+    Get-CimInstance Win32_Printer |
+        Select-Object Name, DriverName, PortName, Default, PrinterStatus, WorkOffline |
+        Format-Table -AutoSize
+}
+Save-Diagnostic "11-hardware-bridge" {
+    try {
+        Invoke-RestMethod -Uri "http://127.0.0.1:17891/health" -TimeoutSec 5 |
+            ConvertTo-Json -Depth 5
+    } catch {
+        "Hardware bridge unavailable: $($_.Exception.Message)"
+    }
+}
+
 if (Test-Path $launcherLog) {
-    Copy-Item $launcherLog (Join-Path $bundleDirectory "10-launcher.log")
+    Copy-Item $launcherLog (Join-Path $bundleDirectory "12-launcher.log")
+}
+if (Test-Path $hardwareLog) {
+    Copy-Item $hardwareLog (Join-Path $bundleDirectory "13-hardware-bridge.log")
 }
 
 Compress-Archive -Path "$bundleDirectory\*" -DestinationPath $bundleZip -Force

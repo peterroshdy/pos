@@ -698,6 +698,8 @@ const ar: Record<string, string> = {
   "Invalid user or password": "المستخدم أو كلمة المرور غير صحيحة",
   "Manual POS open": "فتح يدوي لنقطة البيع",
   "Internal server error": "خطأ داخلي في الخادم",
+  "Cash drawer hardware bridge is not configured": "خدمة درج النقدية غير مهيأة على جهاز ويندوز",
+  "The cash drawer could not be opened": "تعذر فتح درج النقدية",
 };
 
 const patterns: Array<[RegExp, (...parts: string[]) => string]> = [
@@ -716,6 +718,7 @@ const patterns: Array<[RegExp, (...parts: string[]) => string]> = [
   [/^held_order:(.+)$/, (id) => `طلب معلّق:${id}`],
   [/^role:(.+)$/, (id) => `دور:${id}`],
   [/^Cash checkout (.+)$/, (order) => `دفع نقدي ${order}`],
+  [/^Hardware bridge returned (\d+)$/, (status) => `تعذر فتح درج النقدية (خطأ الجهاز ${status})`],
 ];
 
 export function translateArabic(value: string): string {

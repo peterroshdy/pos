@@ -237,6 +237,7 @@ CREATE TABLE IF NOT EXISTS shifts (
   user_id TEXT NOT NULL REFERENCES users(id),
   opened_at TEXT NOT NULL,
   opening_cash INTEGER NOT NULL DEFAULT 0,
+  shared_drawer INTEGER NOT NULL DEFAULT 0,
   closed_at TEXT,
   closing_cash INTEGER,
   expected_cash INTEGER,
@@ -1057,6 +1058,13 @@ export function createDatabase(path: string) {
     );
   }
   migrateBranchDeviceModel(db);
+  const shiftColumns = db
+    .prepare("PRAGMA table_info(shifts)")
+    .all() as unknown as Array<{ name: string }>;
+  if (!shiftColumns.some((column) => column.name === "shared_drawer"))
+    db.exec(
+      "ALTER TABLE shifts ADD COLUMN shared_drawer INTEGER NOT NULL DEFAULT 0",
+    );
   seed(db);
   return db;
 }

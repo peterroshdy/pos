@@ -18,6 +18,7 @@ import {
   Search,
   ShoppingCart,
   Trash2,
+  UserPlus,
   UserRound,
   WalletCards,
   X,
@@ -70,8 +71,24 @@ type CartItem = ProductRow & {
   quantity: number;
   note: string;
 };
+type OpenShift = {
+  id: string;
+  user_id: string;
+  user_name: string;
+  user_name_ar: string;
+  opened_at: string;
+  opening_cash: number;
+  shared_drawer: number;
+};
 type PosContext = {
-  shift: { id: string; opened_at: string; opening_cash: number } | null;
+  shift: OpenShift | null;
+  openShifts: OpenShift[];
+  staff: Array<{
+    id: string;
+    name: string;
+    name_ar: string;
+    username: string;
+  }>;
   customers: Array<{
     id: string;
     name: string;
@@ -115,6 +132,8 @@ type CompletedOrder = {
   taxAmount: number;
   total: number;
   paymentMethod: string;
+  userName?: string;
+  userNameAr?: string;
   createdAt: string;
   customerBalance?: number | null;
   items: Array<{
@@ -173,6 +192,14 @@ export function PosPage() {
   const [closeShiftDialog, setCloseShiftDialog] = useState(false);
   const [closingCash, setClosingCash] = useState(0);
   const [closingShift, setClosingShift] = useState(false);
+  const [activeShiftId, setActiveShiftId] = useState(
+    () => localStorage.getItem("talk-taste-active-shift") ?? "",
+  );
+  const [joinShiftDialog, setJoinShiftDialog] = useState(false);
+  const [joiningUserId, setJoiningUserId] = useState("");
+  const [joiningPassword, setJoiningPassword] = useState("");
+  const [joiningShift, setJoiningShift] = useState(false);
+  const [joinError, setJoinError] = useState("");
 
   const load = async () => {
     const [catalog, posContext] = await Promise.all([
@@ -191,6 +218,23 @@ export function PosPage() {
   useEffect(() => {
     void load();
   }, []);
+  const activeShift = useMemo(
+    () =>
+      context?.openShifts.find((shift) => shift.id === activeShiftId) ??
+      context?.shift ??
+      null,
+    [context, activeShiftId],
+  );
+  useEffect(() => {
+    if (!context) return;
+    if (activeShift) {
+      localStorage.setItem("talk-taste-active-shift", activeShift.id);
+      if (activeShift.id !== activeShiftId) setActiveShiftId(activeShift.id);
+    } else {
+      localStorage.removeItem("talk-taste-active-shift");
+      if (activeShiftId) setActiveShiftId("");
+    }
+  }, [context, activeShift, activeShiftId]);
   useEffect(() => {
     if (receipt && context?.receipt.autoPrint) {
       const timer = window.setTimeout(() => window.print(), 250);
@@ -273,7 +317,7 @@ export function PosPage() {
     setVariantProduct(null);
   };
   const chooseProduct = (product: ProductRow) => {
-    if (!context?.shift) {
+    if (!activeShift) {
       setError(language === "ar" ? "افتح درج النقدية أولاً لبدء الوردية." : "Open the cash register first to start the shift.");
       return;
     }
@@ -369,11 +413,11 @@ export function PosPage() {
   };
 
   const holdOrder = async () => {
-    if (!context?.shift || !cart.length) return;
+    if (!activeShift || !cart.length) return;
     await api("/api/orders/hold", {
       method: "POST",
       body: JSON.stringify({
-        shiftId: context.shift.id,
+        shiftId: activeShift.id,
         note: orderNote,
         activityLog,
         items: cart.map((item) => ({
@@ -391,10 +435,11 @@ export function PosPage() {
     setOpeningShift(true);
     setError("");
     try {
-      await api("/api/shifts/open", {
+      const opened = await api<{ id: string }>("/api/shifts/open", {
         method: "POST",
         body: JSON.stringify({ openingCash }),
       });
+      setActiveShiftId(opened.id);
       await load();
       setOpenShiftDialog(false);
     } catch (caught) {
@@ -403,18 +448,52 @@ export function PosPage() {
       setOpeningShift(false);
     }
   };
+  const showJoinShift = () => {
+    const available = context?.staff.find(
+      (employee) =>
+        !context.openShifts.some((shift) => shift.user_id === employee.id),
+    );
+    setJoiningUserId(available?.id ?? context?.staff[0]?.id ?? "");
+    setJoiningPassword("");
+    setJoinError("");
+    setJoinShiftDialog(true);
+  };
+  const joinShift = async () => {
+    if (!joiningUserId || !joiningPassword) return;
+    setJoiningShift(true);
+    setJoinError("");
+    try {
+      const response = await api<{ shift: OpenShift }>("/api/shifts/join", {
+        method: "POST",
+        body: JSON.stringify({
+          userId: joiningUserId,
+          password: joiningPassword,
+        }),
+      });
+      setActiveShiftId(response.shift.id);
+      setJoiningPassword("");
+      setJoinShiftDialog(false);
+      await load();
+    } catch (caught) {
+      setJoinError(
+        caught instanceof Error ? caught.message : "Could not join this POS",
+      );
+    } finally {
+      setJoiningShift(false);
+    }
+  };
   const removeHeld = async (id: string) => {
     await api(`/api/orders/held/${id}`, { method: "DELETE" });
     await load();
   };
   const openDrawer = async () => {
-    if (!context?.shift) return;
+    if (!activeShift) return;
     setDrawerOpening(true);
     setError("");
     try {
       await api("/api/pos/cash-drawer", {
         method: "POST",
-        body: JSON.stringify({ shiftId: context.shift.id, reason: "Barista requested drawer opening" }),
+        body: JSON.stringify({ shiftId: activeShift.id, reason: "Barista requested drawer opening" }),
       });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The cash drawer could not be opened");
@@ -423,7 +502,7 @@ export function PosPage() {
     }
   };
   const closeShift = async () => {
-    if (!context?.shift) return;
+    if (!activeShift) return;
     if (cart.length) {
       setError(language === "ar" ? "أكمل الطلب الحالي قبل إغلاق الوردية." : "Complete or clear the current order before closing the shift.");
       return;
@@ -431,11 +510,14 @@ export function PosPage() {
     setClosingShift(true);
     setError("");
     try {
-      await api(`/api/shifts/${context.shift.id}/close`, {
+      await api(`/api/shifts/${activeShift.id}/close`, {
         method: "POST",
-        body: JSON.stringify({ closingCash }),
+        body: JSON.stringify(
+          activeShift.shared_drawer ? {} : { closingCash },
+        ),
       });
       setCloseShiftDialog(false);
+      setActiveShiftId("");
       await load();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "The shift could not be closed");
@@ -474,7 +556,7 @@ export function PosPage() {
   };
 
   const checkout = async () => {
-    if (!context?.shift || !cart.length) return;
+    if (!activeShift || !cart.length) return;
     setSubmitting(true);
     setError("");
     try {
@@ -484,7 +566,7 @@ export function PosPage() {
           method: "POST",
           body: JSON.stringify({
             clientRequestId: crypto.randomUUID(),
-            shiftId: context.shift.id,
+            shiftId: activeShift.id,
             customerId: paymentMethod === "credit" ? customerId || null : null,
             paymentMethod,
             discountAmount: discount,
@@ -506,7 +588,7 @@ export function PosPage() {
       clearOrder();
       if (
         paymentMethod === "cash" &&
-        context.receipt.drawerTrigger !== "disabled" &&
+        context?.receipt.drawerTrigger !== "disabled" &&
         can("pos.drawer")
       ) {
         try {
@@ -604,14 +686,37 @@ export function PosPage() {
             </h2>
             <p>{filteredProducts.length} products available</p>
           </div>
-          {context?.shift ? <span className="shift-status-actions"><span>{t("shiftOpen")} <i /></span><button className="soft-button" onClick={() => setCloseShiftDialog(true)}>{language === "ar" ? "إغلاق الوردية" : "Close shift"}</button></span> : (
+          {activeShift ? <span className="shift-status-actions"><span>{language === "ar" ? activeShift.user_name_ar : activeShift.user_name} <i /></span><button className="soft-button" onClick={() => setCloseShiftDialog(true)}>{language === "ar" ? "إنهاء الوردية" : "End shift"}</button></span> : (
             <button className="soft-button" onClick={() => setOpenShiftDialog(true)} disabled={openingShift}>
               <Banknote size={16} />
               {openingShift ? (language === "ar" ? "جارٍ الفتح…" : "Opening…") : (language === "ar" ? "فتح درج النقدية" : "Open cash register")}
             </button>
           )}
         </div>
-        {!context?.shift && (
+        {context && context.openShifts.length > 0 && (
+          <div className="pos-on-duty" aria-label={language === "ar" ? "الموظفون في الوردية" : "Staff on duty"}>
+            <span>{language === "ar" ? "في الوردية" : "On duty"}</span>
+            <div>
+              {context.openShifts.map((shift) => (
+                <button
+                  key={shift.id}
+                  className={shift.id === activeShift?.id ? "is-active" : ""}
+                  onClick={() => setActiveShiftId(shift.id)}
+                  title={language === "ar" ? "اختيار منفذ الطلب" : "Select order operator"}
+                >
+                  <UserRound size={14} />
+                  <strong>{language === "ar" ? shift.user_name_ar : shift.user_name}</strong>
+                  <small>{new Date(shift.opened_at).toLocaleTimeString(language === "ar" ? "ar-EG" : "en-EG", { hour: "numeric", minute: "2-digit" })}</small>
+                </button>
+              ))}
+              <button className="pos-join-shift" onClick={showJoinShift}>
+                <UserPlus size={15} />
+                <strong>{language === "ar" ? "انضمام موظف" : "Join employee"}</strong>
+              </button>
+            </div>
+          </div>
+        )}
+        {!activeShift && (
           <div className="pos-shift-required" role="alert">
             <Banknote size={18} />
             <strong>{language === "ar" ? "افتح درج النقدية قبل تسجيل أي طلب" : "Open the cash register before taking orders"}</strong>
@@ -628,7 +733,7 @@ export function PosPage() {
                 className={`product-card ${inCart ? "product-card--selected" : ""}`}
                 key={product.id}
                 onClick={() => chooseProduct(product)}
-                disabled={soldOut || !context?.shift}
+                disabled={soldOut || !activeShift}
               >
                 <div
                   className="product-card__visual"
@@ -690,7 +795,7 @@ export function PosPage() {
               </p>
             </div>
           </div>
-          {context?.shift && can("pos.drawer") && (
+          {activeShift && can("pos.drawer") && (
             <button className="soft-button drawer-button" onClick={() => void openDrawer()} disabled={drawerOpening}>
               <Banknote size={17} />
               {drawerOpening ? (language === "ar" ? "جارٍ الفتح…" : "Opening…") : (language === "ar" ? "فتح درج النقدية" : "Open cash drawer")}
@@ -793,7 +898,7 @@ export function PosPage() {
         <div className="order-actions">
           <button
             className="checkout-button"
-            disabled={!cart.length || !context?.shift}
+            disabled={!cart.length || !activeShift}
             onClick={() => {
               setCheckoutOpen(true);
               setCashReceived(total);
@@ -979,28 +1084,75 @@ export function PosPage() {
         </div>
       )}
 
-      {closeShiftDialog && context?.shift && (
+      {joinShiftDialog && context && (
+        <div className="modal-backdrop">
+          <section className="modal compact-modal pos-join-modal">
+            <header>
+              <div>
+                <span><UserPlus size={22} /></span>
+                <div>
+                  <h2>{language === "ar" ? "الانضمام إلى نقطة البيع" : "Join this POS"}</h2>
+                  <p>{language === "ar" ? "يسجل الموظف دخوله بكلمة مروره ويبدأ ورديته دون إنهاء جلسة الموظف الآخر." : "The employee signs in with their own password. The current order and other shifts stay open."}</p>
+                </div>
+              </div>
+              <button className="icon-button" onClick={() => setJoinShiftDialog(false)}><X /></button>
+            </header>
+            <label className="field">
+              <span>{language === "ar" ? "الموظف" : "Employee"}</span>
+              <select value={joiningUserId} onChange={(event) => setJoiningUserId(event.target.value)} autoFocus>
+                <option value="">{language === "ar" ? "اختر الموظف" : "Select employee"}</option>
+                {context.staff.map((employee) => {
+                  const isOpen = context.openShifts.some((shift) => shift.user_id === employee.id);
+                  return (
+                    <option key={employee.id} value={employee.id}>
+                      {language === "ar" ? employee.name_ar : employee.name}{isOpen ? (language === "ar" ? " — الوردية مفتوحة" : " — shift open") : ""}
+                    </option>
+                  );
+                })}
+              </select>
+            </label>
+            <label className="field">
+              <span>{language === "ar" ? "كلمة المرور" : "Password"}</span>
+              <input
+                type="password"
+                value={joiningPassword}
+                onChange={(event) => setJoiningPassword(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") void joinShift();
+                }}
+                autoComplete="current-password"
+              />
+            </label>
+            {joinError && <div className="form-error">{joinError}</div>}
+            <button className="primary-button checkout-confirm" onClick={() => void joinShift()} disabled={joiningShift || !joiningUserId || !joiningPassword}>
+              {joiningShift ? (language === "ar" ? "جارٍ تسجيل الدخول…" : "Signing in…") : (language === "ar" ? "بدء الوردية على هذا الجهاز" : "Start shift on this device")}
+            </button>
+          </section>
+        </div>
+      )}
+
+      {closeShiftDialog && activeShift && (
         <div className="modal-backdrop">
           <section className="modal compact-modal">
             <header>
               <div>
                 <span><Banknote size={22} /></span>
                 <div>
-                  <h2>{language === "ar" ? "إغلاق الوردية" : "Close shift"}</h2>
-                  <p>{language === "ar" ? "أدخل النقد المعدود فعلياً في الدرج." : "Count the physical cash in the drawer and enter it here."}</p>
+                  <h2>{language === "ar" ? `إنهاء وردية ${activeShift.user_name_ar}` : `End ${activeShift.user_name}'s shift`}</h2>
+                  <p>{activeShift.shared_drawer ? (language === "ar" ? "هذه وردية متداخلة على درج مشترك. سيتم تسجيل وقت الانتهاء دون فرق نقدي، وستبقى ورديات الموظفين الآخرين مفتوحة." : "This is an overlapping shared-drawer shift. Its end time will be recorded without a cash variance, and the other employees stay on duty.") : (language === "ar" ? "أدخل النقد المعدود فعلياً في الدرج." : "Count the physical cash in the drawer and enter it here.")}</p>
                 </div>
               </div>
               <button className="icon-button" onClick={() => setCloseShiftDialog(false)}><X /></button>
             </header>
-            <label className="cash-input">
+            {!activeShift.shared_drawer && <label className="cash-input">
               <span>{language === "ar" ? "النقد عند الإغلاق" : "Closing cash"}</span>
               <div>
                 <span>EGP</span>
                 <input type="number" min="0" step="0.01" value={closingCash / 100 || ""} onChange={(event) => setClosingCash(Math.max(0, Math.round(Number(event.target.value) * 100)))} autoFocus />
               </div>
-            </label>
+            </label>}
             <button className="primary-button checkout-confirm" onClick={() => void closeShift()} disabled={closingShift}>
-              {closingShift ? (language === "ar" ? "جارٍ الإغلاق…" : "Closing…") : (language === "ar" ? "حفظ إغلاق الوردية" : "Save shift closing")}
+              {closingShift ? (language === "ar" ? "جارٍ الإغلاق…" : "Closing…") : (language === "ar" ? "إنهاء هذه الوردية" : "End this shift")}
             </button>
           </section>
         </div>
@@ -1039,7 +1191,7 @@ export function PosPage() {
               </div>
               <div>
                 <span>Barista</span>
-                <strong>{language === "ar" ? context?.baristaAr : context?.barista}</strong>
+                <strong>{language === "ar" ? receipt.userNameAr ?? context?.baristaAr : receipt.userName ?? context?.barista}</strong>
               </div>
               <hr />
               {receipt.items?.map((item, index) => (
